@@ -86,7 +86,7 @@ fn add_major_release_dates(
     statuses: &mut [UpstreamStatus],
     warnings: &mut Vec<String>,
 ) {
-    let mut failed = 0;
+    let mut failures = Vec::new();
     for (package, status) in packages.iter().zip(statuses.iter_mut()) {
         let UpstreamStatus::Behind {
             fedora_gap: Some(Gap::Major),
@@ -107,25 +107,32 @@ fn add_major_release_dates(
                 *new_major_since =
                     baseline.and_then(|fedora| first_new_major(name, fedora, &releases));
             }
-            Err(_) => failed += 1,
+            Err(e) => failures.push(e),
         }
     }
-    if failed > 0 {
+    if let Some(first) = failures.first() {
         warnings.push(format!(
-            "Couldn't get release dates for {failed} packages, so they're judged without them"
+            "Couldn't get release dates for {} packages, so they're judged without them. The first error: {first}",
+            failures.len()
         ));
     }
 }
 
 /// The day the earliest release in a newer major version than `fedora` was seen.
+///
+/// Releases with no date are old ones from before dates were recorded. If the new
+/// major has one, that major is old, however recent its latest patch is, so there's
+/// no date to give it a grace period with.
 fn first_new_major(name: &str, fedora: &str, releases: &[UpstreamRelease]) -> Option<Date> {
-    releases
+    // Collecting `Option`s into `Option<Vec<_>>` gives `None` if any of them is `None`.
+    let dates: Option<Vec<Date>> = releases
         .iter()
         .filter(|release| {
             compare_to_upstream(name, fedora, &release.version) == Comparison::Behind(Gap::Major)
         })
         .map(|release| release.first_seen)
-        .min()
+        .collect();
+    dates?.into_iter().min()
 }
 
 fn first_comparison(
@@ -430,7 +437,7 @@ mod tests {
     fn release(version: &str, year: i32, month: Month, day: u8) -> UpstreamRelease {
         UpstreamRelease {
             version: version.to_string(),
-            first_seen: Date::from_calendar_date(year, month, day).unwrap(),
+            first_seen: Some(Date::from_calendar_date(year, month, day).unwrap()),
         }
     }
 
@@ -458,6 +465,35 @@ mod tests {
         assert_eq!(
             first_new_major("libnfs", "6.0.2", &releases),
             Some(Date::from_calendar_date(2025, Month::March, 1).unwrap())
+        );
+    }
+
+    /// Real shape: spandsp's 0.0.6 has no date. Skipping such a release could date
+    /// an old major by its latest patch, and wrongly excuse the package.
+    #[test]
+    fn an_undated_release_in_the_new_major_means_the_major_is_old() {
+        let releases = [
+            release("3.0.5", 2026, Month::November, 1),
+            UpstreamRelease {
+                version: "3.0.0".to_string(),
+                first_seen: None,
+            },
+        ];
+        assert_eq!(first_new_major("x", "2.0", &releases), None);
+    }
+
+    #[test]
+    fn an_undated_release_in_an_older_major_does_not_matter() {
+        let releases = [
+            release("4.0.0", 2026, Month::September, 17),
+            UpstreamRelease {
+                version: "2.0".to_string(),
+                first_seen: None,
+            },
+        ];
+        assert_eq!(
+            first_new_major("filelock", "3.20.3", &releases),
+            Some(Date::from_calendar_date(2026, Month::September, 17).unwrap())
         );
     }
 

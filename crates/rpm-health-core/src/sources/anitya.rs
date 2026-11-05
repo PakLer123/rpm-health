@@ -46,11 +46,12 @@ pub struct UpstreamPackage {
     pub ecosystem: String,
 }
 
-/// One upstream release and the day it was first seen.
+/// One upstream release and the day it was first seen. Old releases can have no
+/// date, because they predate release-monitoring.org recording them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpstreamRelease {
     pub version: String,
-    pub first_seen: Date,
+    pub first_seen: Option<Date>,
 }
 
 #[derive(Deserialize)]
@@ -73,7 +74,7 @@ struct VersionList {
 #[derive(Deserialize)]
 struct VersionDetail {
     version: String,
-    created_on: String,
+    created_on: Option<String>,
     pre_release: bool,
 }
 
@@ -129,16 +130,16 @@ pub fn fetch_releases(
         .version_details
         .into_iter()
         .filter(|detail| !detail.pre_release)
-        .filter_map(|detail| {
-            // Timestamps come both with and without a time zone, so only the
-            // date part is read.
-            let date = detail.created_on.get(..10)?;
-            Some(UpstreamRelease {
-                first_seen: Date::parse(date, &Iso8601::DATE).ok()?,
-                version: detail.version,
-            })
+        .map(|detail| UpstreamRelease {
+            first_seen: detail.created_on.as_deref().and_then(parse_date),
+            version: detail.version,
         })
         .collect())
+}
+
+/// Timestamps come both with and without a time zone, so only the date part is read.
+fn parse_date(timestamp: &str) -> Option<Date> {
+    Date::parse(timestamp.get(..10)?, &Iso8601::DATE).ok()
 }
 
 fn fetch_one_at_a_time(transport: &dyn Transport, names: &[String]) -> Result<Vec<Item>> {
@@ -300,8 +301,8 @@ mod tests {
         assert!(fetch_upstream_versions(&transport, &[]).unwrap().is_empty());
     }
 
-    /// Real responses for filelock. The version list is cut down to three real
-    /// entries, to keep the fixture readable.
+    /// Real responses for filelock. The version list is cut down to four real
+    /// entries to keep the fixture readable, including one with no date.
     const PROJECT_FIXTURE: &str = include_str!("../../tests/fixtures/anitya_project.json");
     const VERSIONS_FIXTURE: &str = include_str!("../../tests/fixtures/anitya_versions.json");
 
@@ -322,8 +323,12 @@ mod tests {
         let releases = fetch_releases(&transport, "filelock", "pypi").unwrap();
 
         let release = releases.iter().find(|r| r.version == "4.2.9").unwrap();
-        assert_eq!(release.first_seen.to_string(), "2026-11-04");
-        assert_eq!(releases.len(), 3);
+        assert_eq!(release.first_seen.unwrap().to_string(), "2026-11-04");
+        assert_eq!(releases.len(), 4);
+        assert_eq!(
+            releases.iter().filter(|r| r.first_seen.is_none()).count(),
+            1
+        );
     }
 
     #[test]
@@ -343,11 +348,12 @@ mod tests {
     }
 
     #[test]
-    fn prereleases_and_unreadable_dates_are_left_out() {
+    fn prereleases_are_left_out_and_unusable_dates_become_none() {
         let project = "{\"items\": [{\"id\": 1, \"name\": \"x\", \"ecosystem\": \"pypi\"}]}";
         let versions = "{\"version_details\": [\
             {\"version\": \"2.0rc1\", \"created_on\": \"2026-01-01T00:00:00Z\", \"pre_release\": true},\
             {\"version\": \"2.0\", \"created_on\": \"soon\", \"pre_release\": false},\
+            {\"version\": \"1.5\", \"created_on\": null, \"pre_release\": false},\
             {\"version\": \"1.0\", \"created_on\": \"2025-01-01T10:00:00Z\", \"pre_release\": false}]}";
         let transport = FakeTransport::default()
             .with_get(&project_url("x", "pypi"), project)
@@ -355,7 +361,10 @@ mod tests {
 
         let releases = fetch_releases(&transport, "x", "pypi").unwrap();
 
-        assert_eq!(releases.len(), 1);
-        assert_eq!(releases[0].version, "1.0");
+        let versions: Vec<&str> = releases.iter().map(|r| r.version.as_str()).collect();
+        assert_eq!(versions, ["2.0", "1.5", "1.0"]);
+        assert_eq!(releases[0].first_seen, None);
+        assert_eq!(releases[1].first_seen, None);
+        assert_eq!(releases[2].first_seen.unwrap().to_string(), "2025-01-01");
     }
 }
