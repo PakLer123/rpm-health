@@ -8,6 +8,8 @@ use rpm_health_core::model::{MaintainerStatus, PackageStatus};
 use rpm_health_core::signals::maintainer::{MaintainerReport, check_maintainers};
 use rpm_health_core::{release, rpm};
 
+const MAX_RPMS_SHOWN: usize = 3;
+
 // `derive(Parser)` generates the argument parsing and `--help` text from this
 // struct. `///` doc comments become the help text, so explanations for readers
 // of the code, like this one, use `//`.
@@ -78,16 +80,37 @@ fn build_table(entries: &[&PackageStatus]) -> Table {
     let mut table = Table::new();
     table
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(["Source package", "Installed", "Status", "Reason"]);
+        .set_header([
+            "Source package",
+            "Installed RPMs",
+            "Version",
+            "Status",
+            "Reason",
+        ]);
     for entry in entries {
         table.add_row([
             entry.package.source_name.clone(),
+            summarize_rpms(&entry.package.binaries),
             entry.package.versions.join(", "),
             entry.status.label().to_string(),
             entry.status.reason(),
         ]);
     }
     table
+}
+
+/// Names the RPMs you'd actually look up or remove, which often differ from
+/// the source package. Some packages have dozens, so long lists get shortened.
+fn summarize_rpms(binaries: &[String]) -> String {
+    if binaries.len() <= MAX_RPMS_SHOWN {
+        binaries.join(", ")
+    } else {
+        format!(
+            "{}, +{} more",
+            binaries[..MAX_RPMS_SHOWN].join(", "),
+            binaries.len() - MAX_RPMS_SHOWN
+        )
+    }
 }
 
 fn summary(report: &MaintainerReport) -> String {
@@ -108,4 +131,29 @@ fn summary(report: &MaintainerReport) -> String {
         count("Maintained"),
         report.third_party.len(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn short_rpm_lists_are_shown_in_full() {
+        assert_eq!(
+            summarize_rpms(&names(&["linux-atm-libs"])),
+            "linux-atm-libs"
+        );
+    }
+
+    #[test]
+    fn long_rpm_lists_are_shortened() {
+        assert_eq!(
+            summarize_rpms(&names(&["a", "b", "c", "d", "e"])),
+            "a, b, c, +2 more"
+        );
+    }
 }
