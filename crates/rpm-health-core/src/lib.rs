@@ -2,5 +2,6 @@
 //! so the CLI today and a GTK front-end later can both sit on top of it.
 
 pub mod error;
+pub mod http;
 pub mod model;
 pub mod rpm;
