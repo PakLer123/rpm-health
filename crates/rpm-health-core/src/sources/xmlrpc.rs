@@ -171,6 +171,13 @@ impl Value {
         }
     }
 
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Double(number) => Some(*number),
+            _ => None,
+        }
+    }
+
     pub fn as_array(&self) -> Option<&[Value]> {
         match self {
             Value::Array(items) => Some(items),
