@@ -4,9 +4,10 @@ use clap::{Parser, Subcommand};
 use comfy_table::{ContentArrangement, Table};
 use rpm_health_core::error::Result;
 use rpm_health_core::http::HttpClient;
-use rpm_health_core::model::{MaintainerStatus, PackageStatus};
+use rpm_health_core::model::{ActivityStatus, InstalledPackage, MaintainerStatus, PackageStatus};
+use rpm_health_core::signals::activity::{ActivityReport, PackageActivity, check_activity};
 use rpm_health_core::signals::maintainer::{MaintainerReport, check_maintainers};
-use rpm_health_core::{release, rpm};
+use rpm_health_core::{dates, release, rpm};
 
 const MAX_RPMS_SHOWN: usize = 3;
 
@@ -51,13 +52,22 @@ fn scan() -> Result<()> {
         "Checking {} source packages against Fedora's data for {current_tag}...",
         packages.len()
     );
-    let report = check_maintainers(&transport, packages, &current_tag)?;
+    let maintainers = check_maintainers(&transport, packages, &current_tag)?;
 
-    print_report(&report);
+    let fedora_packages: Vec<&InstalledPackage> = maintainers
+        .statuses
+        .iter()
+        .map(|entry| &entry.package)
+        .collect();
+    let activity = check_activity(&transport, &fedora_packages, dates::today());
+
+    print_maintainers(&maintainers);
+    println!();
+    print_activity(&activity);
     Ok(())
 }
 
-fn print_report(report: &MaintainerReport) {
+fn print_maintainers(report: &MaintainerReport) {
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }
@@ -68,12 +78,33 @@ fn print_report(report: &MaintainerReport) {
         .filter(|entry| entry.status != MaintainerStatus::Maintained)
         .collect();
 
+    println!("Maintainer status");
     if needing_attention.is_empty() {
         println!("No packages need attention.");
     } else {
         println!("{}", build_table(&needing_attention));
     }
     println!("{}", summary(report));
+}
+
+fn print_activity(report: &ActivityReport) {
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+
+    let not_active: Vec<&PackageActivity> = report
+        .statuses
+        .iter()
+        .filter(|entry| !matches!(entry.status, ActivityStatus::Active { .. }))
+        .collect();
+
+    println!("Fedora activity");
+    if not_active.is_empty() {
+        println!("All packages have changed recently.");
+    } else {
+        println!("{}", build_activity_table(&not_active));
+    }
+    println!("{}", activity_summary(report));
 }
 
 fn build_table(entries: &[&PackageStatus]) -> Table {
@@ -94,6 +125,27 @@ fn build_table(entries: &[&PackageStatus]) -> Table {
             entry.package.versions.join(", "),
             entry.status.label().to_string(),
             entry.status.reason(),
+        ]);
+    }
+    table
+}
+
+fn build_activity_table(entries: &[&PackageActivity]) -> Table {
+    let mut table = Table::new();
+    table
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header([
+            "Source package",
+            "Installed RPMs",
+            "Status",
+            "Last change (excluding mass rebuilds)",
+        ]);
+    for entry in entries {
+        table.add_row([
+            entry.package.source_name.clone(),
+            summarize_rpms(&entry.package.binaries),
+            entry.status.label().to_string(),
+            entry.status.detail(),
         ]);
     }
     table
@@ -130,6 +182,22 @@ fn summary(report: &MaintainerReport) -> String {
         count("Unknown"),
         count("Maintained"),
         report.third_party.len(),
+    )
+}
+
+fn activity_summary(report: &ActivityReport) -> String {
+    let count = |label: &str| {
+        report
+            .statuses
+            .iter()
+            .filter(|entry| entry.status.label() == label)
+            .count()
+    };
+    format!(
+        "{} active, {} quiet, {} unknown. Quiet means no changes in two years, which is normal for finished, stable software.",
+        count("Active"),
+        count("Quiet"),
+        count("Unknown"),
     )
 }
 
