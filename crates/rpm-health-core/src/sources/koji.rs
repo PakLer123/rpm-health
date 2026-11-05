@@ -20,9 +20,9 @@ const BUILDS_BATCH_SIZE: usize = 50;
 /// A quiet package gets about two mass rebuilds a year, so eight builds usually
 /// reaches back past them to the last build by a person.
 const BUILDS_PER_PACKAGE: usize = 8;
-/// Only Fedora builds, not ELN or EPEL. It's a coarse filter that still lets
-/// through releases like `fc45app1`, so callers check `KojiBuild::release`.
-const FEDORA_BUILD_PATTERN: &str = "*.fc*";
+/// Only Fedora builds, not ELN, EPEL or Flatpak builds like `fc45app1`, which
+/// would otherwise use up the `BUILDS_PER_PACKAGE` window.
+const FEDORA_BUILD_PATTERN: &str = "*.fc??";
 /// Koji assigns packages with no maintainer to this special user.
 pub const ORPHAN_OWNER: &str = "orphan";
 

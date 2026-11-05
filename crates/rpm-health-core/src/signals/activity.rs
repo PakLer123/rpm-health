@@ -8,8 +8,8 @@
 //!
 //! The rule is deliberately lenient. A rebuild for a new Python or library
 //! version counts as activity, because Koji can't tell those apart from other
-//! work. So some "Active" packages haven't had a maintainer's attention, but a
-//! "Quiet" package really hasn't changed.
+//! work. So some "Active" packages haven't had a maintainer's attention, but we
+//! avoid calling a package "Quiet" when someone has recently worked on it.
 
 use std::collections::HashMap;
 
@@ -157,8 +157,8 @@ fn is_mass_rebuild(entry: &ChangelogEntry) -> bool {
         || text.contains("mass rebuild")
 }
 
-/// Leaves out mass rebuilds, and also lookalike releases such as `1.fc45app1`,
-/// which are Flatpak builds rather than the RPMs people install.
+/// Leaves out mass rebuilds. Koji's search pattern already filters most other
+/// builds, but it's only a glob, so the release is checked properly here too.
 fn is_maintainer_build(build: &KojiBuild) -> bool {
     build.owner != RELENG_OWNER && is_fedora_release(&build.release)
 }
