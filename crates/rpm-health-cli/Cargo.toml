@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
+repository.workspace = true
 
 # The package is rpm-health-cli, but the command people type is rpm-health.
 [[bin]]
