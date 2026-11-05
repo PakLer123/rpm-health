@@ -50,13 +50,14 @@ $ cargo install --locked --path crates/rpm-health-cli
 
 ```console
 $ rpm-health scan                 # list the packages that need attention
+$ rpm-health scan --only unknown  # or any other label, such as stale or healthy
 $ rpm-health scan --only stale    # list only one label
 $ rpm-health scan --json          # everything, for scripts
 $ rpm-health show linux-atm-libs  # full details, by RPM or source package name
 $ rpm-health scan --refresh       # ignore the cache and fetch fresh data
 ```
 
-The first scan of the day takes about 8 minutes, because one of the data sources
+The first scan of the day takes about 10 minutes, because one of the data sources
 has no way to look up many packages at once. Later scans reuse saved responses and
 take a couple of seconds.
 
@@ -82,12 +83,19 @@ changes, so no single signal decides unless it's definitive.
 | **Retired** | Removed from your Fedora release, so it no longer gets updates |
 | **Orphaned** | Has no maintainer, and will be retired after six weeks unless adopted |
 | **At risk** | Removed from Rawhide, so it won't be in the next Fedora release |
-| **Stale** | Quiet for two years and behind upstream, or a major version behind upstream even in Rawhide |
+| **Stale** | Quiet for two years and behind upstream, or a major version behind upstream even in Rawhide, once that version is at least 90 days old |
 | **Unknown** | Quiet, with no usable upstream data, so there's no evidence either way |
 | **Healthy** | None of the above |
 
 "Quiet" means no changes in two years, not counting the mass rebuilds Fedora does
-for every package.
+for every package. Major versions get a 90-day grace period because big updates take
+time to test and coordinate, so a brand new upstream release doesn't count against an
+actively maintained package.
+
+`scan` lists the first four labels by default, and counts the rest in its summary.
+Many Unknown packages are things like fonts and macro packages, which have little
+upstream to compare against. In a narrow terminal, the table leaves out the RPM and
+version columns, and `show` still has them.
 
 Packages from outside Fedora, such as RPM Fusion or COPR, are skipped and counted,
 because Fedora's data says nothing about them.
@@ -102,6 +110,7 @@ because Fedora's data says nothing about them.
 | When was it orphaned? | The report behind Fedora's orphan announcements | One |
 | When did it last change? | The local changelog, then Koji for quiet packages | Batched |
 | What's the latest upstream release? | [release-monitoring.org](https://release-monitoring.org/) (Anitya) | About 100 pages |
+| How old is a new major version? | release-monitoring.org | Two per package with a major gap |
 | Which release is Rawhide? | [Bodhi](https://bodhi.fedoraproject.org/), Fedora's update system | One |
 
 ### Being a good neighbour

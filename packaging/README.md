@@ -15,8 +15,8 @@ once that tag exists on GitHub.
 
 ```console
 $ git switch main
-$ git tag -a v0.1.0 -m "rpm-health 0.1.0"
-$ git push origin main v0.1.0
+$ git tag -a v0.1.1 -m "rpm-health 0.1.1"
+$ git push origin main v0.1.1
 ```
 
 ## 2. Build it locally in mock
@@ -28,7 +28,7 @@ $ sudo dnf install mock rpmdevtools fedora-review fedpkg copr-cli
 $ sudo usermod -a -G mock "$USER"     # then log out and back in
 $ spectool -g -C ~/rpmbuild/SOURCES packaging/rpm-health.spec
 $ rpmbuild -bs packaging/rpm-health.spec
-$ mock -r fedora-rawhide-x86_64 --rebuild ~/rpmbuild/SRPMS/rpm-health-0.1.0-1.*.src.rpm
+$ mock -r fedora-rawhide-x86_64 --rebuild ~/rpmbuild/SRPMS/rpm-health-0.1.1-1.*.src.rpm
 ```
 
 Results are written to `/var/lib/mock/fedora-rawhide-x86_64/result/`.
@@ -46,7 +46,7 @@ somewhere to download it from.
 ```console
 $ copr-cli create rpm-health --chroot fedora-45-x86_64 --chroot fedora-rawhide-x86_64 \
     --description "Find installed Fedora packages at risk of dying or going stale"
-$ copr-cli build rpm-health ~/rpmbuild/SRPMS/rpm-health-0.1.0-1.*.src.rpm
+$ copr-cli build rpm-health ~/rpmbuild/SRPMS/rpm-health-0.1.1-1.*.src.rpm
 ```
 
 People can then install it with:

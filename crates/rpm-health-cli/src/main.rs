@@ -181,7 +181,7 @@ fn scan(only: Option<HealthLabel>, json: bool, refresh: bool) -> Result<()> {
         packages.len()
     );
     if !transport.has_saved_response(&anitya::full_list_url(1)?) {
-        eprintln!("Nothing recent is cached, so this takes about 8 minutes...");
+        eprintln!("Nothing recent is cached, so this takes about 10 minutes...");
     }
     let mut report = check_health(&transport, packages, &current_tag, dates::today())?;
 
