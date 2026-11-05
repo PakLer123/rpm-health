@@ -8,10 +8,11 @@ use rpm_health_core::model::{MaintainerStatus, PackageStatus};
 use rpm_health_core::signals::maintainer::{MaintainerReport, check_maintainers};
 use rpm_health_core::{release, rpm};
 
+// `derive(Parser)` generates the argument parsing and `--help` text from this
+// struct. `///` doc comments become the help text, so explanations for readers
+// of the code, like this one, use `//`.
+
 /// Finds installed Fedora packages that are at risk of dying or going stale.
-///
-/// `derive(Parser)` generates the argument parsing and `--help` text from this
-/// struct, using these doc comments as the descriptions.
 #[derive(Parser)]
 #[command(name = "rpm-health", version)]
 struct Cli {
