@@ -52,6 +52,7 @@ take a couple of seconds.
 ### Shell completions and man pages
 
 ```console
+$ mkdir -p ~/.local/share/bash-completion/completions
 $ rpm-health completions bash > ~/.local/share/bash-completion/completions/rpm-health
 $ rpm-health man ~/.local/share/man/man1
 ```
