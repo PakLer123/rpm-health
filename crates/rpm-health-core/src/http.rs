@@ -58,7 +58,7 @@ impl HttpClient {
             .build()
             .map_err(|e| Error::Http {
                 url: "(client setup)".to_string(),
-                message: e.to_string(),
+                message: describe(&e),
             })?;
         Ok(HttpClient { client })
     }
@@ -85,12 +85,28 @@ fn read_response(
 ) -> Result<Response> {
     let to_error = |e: reqwest::Error| Error::Http {
         url: url.to_string(),
-        message: e.to_string(),
+        message: describe(&e),
     };
     let response = result.map_err(to_error)?;
     let status = response.status().as_u16();
     let body = response.text().map_err(to_error)?;
     Ok(Response { status, body })
+}
+
+/// Library errors often wrap the real cause, such as "connection reset", inside
+/// a vaguer one. This follows the chain of `source()` errors to include it all.
+///
+/// `&dyn Error` accepts a reference to any type that implements the `Error`
+/// trait, which lets the loop step through errors of different types.
+fn describe(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
 
 /// A `Transport` for tests. `#[cfg(test)]` means this module only exists when
@@ -183,5 +199,18 @@ mod tests {
             response.into_success_body("http://x"),
             Err(Error::BadStatus { status: 503, .. })
         ));
+    }
+
+    #[test]
+    fn describe_includes_the_underlying_cause() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("error sending request")]
+        struct Outer(#[source] std::io::Error);
+
+        let cause = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset");
+        assert_eq!(
+            describe(&Outer(cause)),
+            "error sending request: connection reset"
+        );
     }
 }
