@@ -6,8 +6,17 @@ Release:        1%{?dist}
 Summary:        Find installed Fedora packages at risk of dying or going stale
 
 SourceLicense:  Apache-2.0 OR MIT
-# Filled in from the %%cargo_license_summary output in the build log.
-License:        Apache-2.0 OR MIT
+# The binary statically links its crate dependencies. To update this list, read
+# the %%cargo_license_summary output in the build log:
+#
+# Apache-2.0
+# Apache-2.0 OR MIT
+# Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+# MIT
+# MIT OR Apache-2.0
+# Unicode-3.0
+# Unlicense OR MIT
+License:        Apache-2.0 AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND MIT AND Unicode-3.0 AND (Unlicense OR MIT)
 URL:            https://github.com/PakLer123/rpm-health
 Source:         %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
