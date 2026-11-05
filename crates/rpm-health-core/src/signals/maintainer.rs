@@ -116,7 +116,7 @@ pub fn check_maintainers(
                     &mut warnings,
                 ),
                 Classification::Orphaned => MaintainerStatus::Orphaned {
-                    since: orphan_dates.get(name).cloned(),
+                    since: orphan_dates.get(name).copied(),
                 },
                 Classification::Maintained => MaintainerStatus::Maintained,
                 Classification::NotFound => MaintainerStatus::Unknown {
@@ -169,6 +169,8 @@ fn confirm_retirement(
 
 #[cfg(test)]
 mod tests {
+    use time::{Date, Month};
+
     use super::*;
     use crate::error::Error;
     use crate::http::fake::FakeTransport;
@@ -367,7 +369,7 @@ mod tests {
         assert_eq!(
             report.statuses[0].status,
             MaintainerStatus::Orphaned {
-                since: Some("2026-10-26".to_string())
+                since: Some(Date::from_calendar_date(2026, Month::October, 26).unwrap())
             }
         );
     }

@@ -22,5 +22,8 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# Date parsing, formatting and arithmetic, which is too easy to get subtly wrong
+# by hand. Only the features we use are enabled.
+time = { version = "0.3", default-features = false, features = ["std", "formatting", "parsing"] }
 
 rpm-health-core = { path = "crates/rpm-health-core" }

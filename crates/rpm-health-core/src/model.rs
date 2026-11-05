@@ -1,3 +1,8 @@
+use time::{Date, Duration};
+
+/// Fedora retires packages that stay orphaned for this long.
+const ORPHAN_GRACE_PERIOD: Duration = Duration::weeks(6);
+
 /// One installed source package, with the binary RPMs built from it.
 ///
 /// Fedora tracks maintainers per source package, so `kernel-core` and
@@ -20,9 +25,9 @@ pub struct InstalledPackage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaintainerStatus {
     Maintained,
-    /// `since` is a `YYYY-MM-DD` date, when the orphan report provides one.
+    /// `since` comes from the orphan report, when it has this package.
     Orphaned {
-        since: Option<String>,
+        since: Option<Date>,
     },
     /// Retired in Rawhide, so it won't be in the next Fedora release.
     Retiring {
@@ -58,7 +63,10 @@ impl MaintainerStatus {
         match self {
             MaintainerStatus::Maintained => "Has a maintainer".to_string(),
             MaintainerStatus::Orphaned { since: Some(date) } => {
-                format!("No maintainer since {date}; retired after six weeks unless adopted")
+                let retirement = *date + ORPHAN_GRACE_PERIOD;
+                format!(
+                    "No maintainer since {date}; retirement due around {retirement} unless adopted"
+                )
             }
             MaintainerStatus::Orphaned { since: None } => {
                 "No maintainer; retired after six weeks unless adopted".to_string()
@@ -79,14 +87,19 @@ pub struct PackageStatus {
 
 #[cfg(test)]
 mod tests {
+    use time::Month;
+
     use super::*;
 
     #[test]
-    fn orphaned_reason_includes_the_date_when_known() {
+    fn orphaned_reason_includes_both_dates_when_known() {
         let status = MaintainerStatus::Orphaned {
-            since: Some("2026-09-30".to_string()),
+            since: Some(Date::from_calendar_date(2026, Month::September, 30).unwrap()),
         };
-        assert!(status.reason().contains("2026-09-30"));
+        assert_eq!(
+            status.reason(),
+            "No maintainer since 2026-09-30; retirement due around 2026-11-11 unless adopted"
+        );
     }
 
     #[test]

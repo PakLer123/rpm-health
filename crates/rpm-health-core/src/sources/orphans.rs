@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
+use time::format_description::well_known::Rfc3339;
+use time::{Date, OffsetDateTime};
 
 use crate::error::{Error, Result};
 use crate::http::Transport;
@@ -20,23 +22,25 @@ struct Report {
     status_change: HashMap<String, String>,
 }
 
-/// Returns a map of source package name to `YYYY-MM-DD` date.
-pub fn fetch_orphan_dates(transport: &dyn Transport) -> Result<HashMap<String, String>> {
+/// Returns a map of source package name to the date it was orphaned.
+pub fn fetch_orphan_dates(transport: &dyn Transport) -> Result<HashMap<String, Date>> {
     let body = transport.get(REPORT_URL)?.into_success_body(REPORT_URL)?;
     parse_report(&body)
 }
 
-fn parse_report(body: &str) -> Result<HashMap<String, String>> {
+fn parse_report(body: &str) -> Result<HashMap<String, Date>> {
     let report: Report = serde_json::from_str(body).map_err(|e| Error::Parse {
         what: "orphan report",
         message: e.to_string(),
     })?;
+    // An unreadable date only costs us that date, so skip it. `filter_map` keeps
+    // the `Some` results and drops the `None` ones.
     Ok(report
         .status_change
         .into_iter()
-        .map(|(name, timestamp)| {
-            let date = timestamp.split('T').next().unwrap_or_default().to_string();
-            (name, date)
+        .filter_map(|(name, timestamp)| {
+            let parsed = OffsetDateTime::parse(&timestamp, &Rfc3339).ok()?;
+            Some((name, parsed.date()))
         })
         .collect())
 }
@@ -52,7 +56,16 @@ mod tests {
     fn keeps_only_the_date_from_each_timestamp() {
         let transport = FakeTransport::default().with_get(REPORT_URL, FIXTURE);
         let dates = fetch_orphan_dates(&transport).unwrap();
-        assert_eq!(dates["clang15"], "2026-10-26");
+        assert_eq!(dates["clang15"].to_string(), "2026-10-26");
+    }
+
+    #[test]
+    fn an_unreadable_date_only_loses_that_entry() {
+        let body =
+            "{\"status_change\": {\"bad\": \"soon\", \"good\": \"2026-10-26T21:47:09+00:00\"}}";
+        let dates = parse_report(body).unwrap();
+        assert_eq!(dates.len(), 1);
+        assert!(dates.contains_key("good"));
     }
 
     #[test]
