@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# This workflow only reads the repository, so that's all it's allowed to do.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Build on Fedora, with Fedora's own Rust toolchain, because that's the only
+    # platform this tool targets and how it will eventually be packaged.
+    container: registry.fedoraproject.org/fedora:latest
+    defaults:
+      run:
+        # Unlike the default shell, this makes a failure anywhere in a pipe fail.
+        shell: bash
+    steps:
+      - name: Install build tools
+        run: dnf install -y --setopt=install_weak_deps=False cargo clippy rustfmt gcc openssl-devel git tar zstd
+
+      # Actions are pinned to a full commit, so a moved tag can't change what runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets --workspace -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked --workspace
+
+      - name: Check the generated completions and man pages
+        run: |
+          cargo run --locked -q -p rpm-health-cli -- completions bash | bash -n
+          cargo run --locked -q -p rpm-health-cli -- man target/man
+          test -s target/man/rpm-health-scan.1
