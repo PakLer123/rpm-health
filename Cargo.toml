@@ -7,8 +7,9 @@ members = ["crates/rpm-health-core", "crates/rpm-health-cli"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# The licence gets chosen in Milestone 5. Until then, nothing can be published
-# to crates.io by accident.
+license = "Apache-2.0 OR MIT"
+# Nothing can be published to crates.io by accident. Publishing is a deliberate
+# decision that comes with Fedora packaging.
 publish = false
 
 # Versions follow what Fedora 45 ships, so Milestone 6 packaging is easier.

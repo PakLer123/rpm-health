@@ -4,6 +4,7 @@ description = "Checks installed Fedora packages for maintainer and upstream heal
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
