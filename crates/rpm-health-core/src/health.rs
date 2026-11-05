@@ -109,7 +109,7 @@ pub fn check_health(
         .zip(activities)
         .zip(upstream.statuses)
         .map(|((entry, activity), upstream)| {
-            let (label, reason) = assess(&entry.status, &activity, &upstream);
+            let (label, reason) = assess(&entry.status, &activity, &upstream, today);
             PackageHealth {
                 package: entry.package,
                 label,
@@ -135,6 +135,7 @@ pub fn assess(
     maintainer: &MaintainerStatus,
     activity: &ActivityStatus,
     upstream: &UpstreamStatus,
+    today: Date,
 ) -> (HealthLabel, String) {
     match maintainer {
         MaintainerStatus::Retired { .. } => (HealthLabel::Retired, maintainer.reason()),
@@ -144,15 +145,16 @@ pub fn assess(
         ),
         MaintainerStatus::Orphaned { .. } => (HealthLabel::Orphaned, maintainer.reason()),
         MaintainerStatus::Unknown { .. } => (HealthLabel::Unknown, maintainer.reason()),
-        MaintainerStatus::Maintained => assess_maintained(activity, upstream),
+        MaintainerStatus::Maintained => assess_maintained(activity, upstream, today),
     }
 }
 
 fn assess_maintained(
     activity: &ActivityStatus,
     upstream: &UpstreamStatus,
+    today: Date,
 ) -> (HealthLabel, String) {
-    if upstream.is_well_behind() {
+    if upstream.is_well_behind(today) {
         return (
             HealthLabel::Stale,
             format!("A major version behind. {}", upstream.detail()),
@@ -252,6 +254,21 @@ mod tests {
             gap: Gap::Major,
             rawhide: None,
             fedora_gap,
+            new_major_since: None,
+        }
+    }
+
+    fn today() -> Date {
+        Date::from_calendar_date(2026, Month::November, 6).unwrap()
+    }
+
+    fn major_gap_since(days_ago: i64) -> UpstreamStatus {
+        UpstreamStatus::Behind {
+            upstream: "2.0".to_string(),
+            gap: Gap::Major,
+            rawhide: Some("1.0".to_string()),
+            fedora_gap: Some(Gap::Major),
+            new_major_since: Some(today() - time::Duration::days(days_ago)),
         }
     }
 
@@ -260,7 +277,7 @@ mod tests {
         activity: &ActivityStatus,
         upstream: &UpstreamStatus,
     ) -> HealthLabel {
-        assess(maintainer, activity, upstream).0
+        assess(maintainer, activity, upstream, today()).0
     }
 
     fn maintained(activity: &ActivityStatus, upstream: &UpstreamStatus) -> HealthLabel {
@@ -305,7 +322,12 @@ mod tests {
     /// The case from the project brief: old, but finished and stable.
     #[test]
     fn quiet_but_matching_upstream_is_healthy() {
-        let (label, reason) = assess(&MaintainerStatus::Maintained, &quiet(), &up_to_date());
+        let (label, reason) = assess(
+            &MaintainerStatus::Maintained,
+            &quiet(),
+            &up_to_date(),
+            today(),
+        );
         assert_eq!(label, HealthLabel::Healthy);
         assert!(reason.contains("2024-05-25"));
     }
@@ -346,6 +368,37 @@ mod tests {
     fn a_major_gap_in_fedora_is_stale_even_when_active() {
         assert_eq!(
             maintained(&active(), &behind(Some(Gap::Major))),
+            HealthLabel::Stale
+        );
+    }
+
+    /// Real case: filelock's new major is 50 days old, and the package is active.
+    #[test]
+    fn a_recent_major_version_does_not_make_an_active_package_stale() {
+        let (label, reason) = assess(
+            &MaintainerStatus::Maintained,
+            &active(),
+            &major_gap_since(50),
+            today(),
+        );
+        assert_eq!(label, HealthLabel::Healthy);
+        assert!(reason.contains("That major version appeared on"));
+    }
+
+    #[test]
+    fn an_old_major_version_makes_an_active_package_stale() {
+        assert_eq!(
+            maintained(&active(), &major_gap_since(90)),
+            HealthLabel::Stale
+        );
+    }
+
+    /// The grace period only protects active packages. A package nobody has
+    /// touched for two years is still stale once upstream has moved on.
+    #[test]
+    fn a_recent_major_version_does_not_excuse_a_quiet_package() {
+        assert_eq!(
+            maintained(&quiet(), &major_gap_since(50)),
             HealthLabel::Stale
         );
     }
@@ -449,7 +502,7 @@ mod tests {
             reason: "Because".to_string(),
             maintainer: MaintainerStatus::Maintained,
             activity: quiet(),
-            upstream: behind(Some(Gap::Major)),
+            upstream: major_gap_since(50),
         };
 
         let json = serde_json::to_value(&entry).unwrap();
@@ -459,6 +512,7 @@ mod tests {
         assert_eq!(json["activity"]["status"], "quiet");
         assert_eq!(json["activity"]["last_change"], "2024-05-25");
         assert_eq!(json["upstream"]["fedora_gap"], "major");
+        assert_eq!(json["upstream"]["new_major_since"], "2026-09-17");
         assert_eq!(json["package"]["source_name"], "demo");
         assert!(json["package"].get("changelog").is_none());
     }
