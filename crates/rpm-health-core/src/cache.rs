@@ -216,8 +216,7 @@ impl<T: Transport> Transport for CachingTransport<T> {
     }
 
     fn post_xml(&self, url: &str, body: String) -> Result<Response> {
-        // Each path uses the body differently, so `fetch` borrows it, and only
-        // a real request needs its own copy.
+        // The body is borrowed for the cache key, so the request gets its own copy.
         self.fetch(url, Some(&body), || self.inner.post_xml(url, body.clone()))
     }
 }
