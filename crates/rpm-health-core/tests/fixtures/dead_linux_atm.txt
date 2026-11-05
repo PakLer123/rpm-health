@@ -1,0 +1,1 @@
+Dead since kernel 7.2 due to missing UAPI headers, see rhbz#2504303
