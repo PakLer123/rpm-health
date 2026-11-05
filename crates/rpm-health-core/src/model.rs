@@ -92,6 +92,52 @@ impl MaintainerStatus {
     }
 }
 
+/// The result of the Fedora activity signal for one package.
+///
+/// Being quiet isn't a verdict. A finished, stable package can go years without
+/// needing changes, so this is only one input to a package's overall health.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivityStatus {
+    /// Changed recently by something other than a Fedora-wide mass rebuild.
+    Active {
+        last_change: Date,
+    },
+    /// Nothing recent, and we know when the last change was.
+    Quiet {
+        last_change: Date,
+    },
+    /// Nothing at all in the history available, which goes back this far.
+    QuietSince {
+        checked_back_to: Date,
+    },
+    Unknown {
+        reason: String,
+    },
+}
+
+impl ActivityStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ActivityStatus::Active { .. } => "Active",
+            ActivityStatus::Quiet { .. } | ActivityStatus::QuietSince { .. } => "Quiet",
+            ActivityStatus::Unknown { .. } => "Unknown",
+        }
+    }
+
+    /// A human-readable description of the last known activity.
+    pub fn detail(&self) -> String {
+        match self {
+            ActivityStatus::Active { last_change } | ActivityStatus::Quiet { last_change } => {
+                last_change.to_string()
+            }
+            ActivityStatus::QuietSince { checked_back_to } => {
+                format!("None found back to {checked_back_to}")
+            }
+            ActivityStatus::Unknown { reason } => reason.clone(),
+        }
+    }
+}
+
 /// A package together with its verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageStatus {
