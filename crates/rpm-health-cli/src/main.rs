@@ -1,8 +1,11 @@
 use std::fmt::Display;
+use std::fs;
 use std::io::{self, ErrorKind, Write};
+use std::path::{Path, PathBuf};
 use std::process::{self, ExitCode};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 use comfy_table::{ContentArrangement, Table};
 use rpm_health_core::cache::{self, CacheStats, CachingTransport};
 use rpm_health_core::error::{Error, Result};
@@ -12,6 +15,7 @@ use rpm_health_core::sources::anitya;
 use rpm_health_core::{dates, release, rpm};
 
 const MAX_RPMS_SHOWN: usize = 3;
+const BINARY_NAME: &str = "rpm-health";
 const CHANGELOG_ENTRIES_SHOWN: usize = 5;
 const SECONDS_PER_HOUR: u64 = 60 * 60;
 
@@ -21,7 +25,14 @@ const SECONDS_PER_HOUR: u64 = 60 * 60;
 
 /// Finds installed Fedora packages that are at risk of dying or going stale.
 #[derive(Parser)]
-#[command(name = "rpm-health", version)]
+#[command(
+    name = BINARY_NAME,
+    version,
+    after_long_help = "\
+rpm-health only reads. It never changes your installed packages. The one thing it
+writes is its cache of responses from Fedora's public services, which is kept for
+a day in $XDG_CACHE_HOME/rpm-health, or ~/.cache/rpm-health if that isn't set."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -30,6 +41,23 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Check all installed packages and list the ones that need attention
+    ///
+    /// Each Fedora package gets one label, from three signals: whether it has a
+    /// maintainer, when it last changed, and how far it is behind upstream. Old
+    /// doesn't mean unhealthy, so a quiet package that matches upstream is healthy.
+    ///
+    /// Retired: removed from your Fedora release.
+    ///
+    /// Orphaned: has no maintainer, and will be retired unless someone adopts it.
+    ///
+    /// At risk: removed from Rawhide, so it won't be in the next Fedora release.
+    ///
+    /// Stale: quiet for two years and behind upstream, or a major version behind
+    /// upstream even in Rawhide.
+    ///
+    /// Unknown: there isn't enough information for a verdict.
+    ///
+    /// Healthy: none of the above. Healthy packages are hidden unless requested.
     Scan {
         /// Only list packages with this health label
         #[arg(long, value_enum)]
@@ -42,6 +70,9 @@ enum Command {
         refresh: bool,
     },
     /// Show full details for one installed package
+    ///
+    /// Shows the label, every signal, and recent changelog entries. Packages can
+    /// be named by RPM or by source package.
     Show {
         /// An RPM name or source package name
         package: String,
@@ -51,6 +82,20 @@ enum Command {
         /// Fetch fresh data instead of using what's cached from the last day
         #[arg(long)]
         refresh: bool,
+    },
+    /// Print a shell completion script
+    ///
+    /// For example, for bash:
+    /// rpm-health completions bash > ~/.local/share/bash-completion/completions/rpm-health
+    Completions {
+        /// The shell to generate for
+        shell: Shell,
+    },
+    /// Write man pages to a directory, for packaging
+    #[command(hide = true)]
+    Man {
+        /// Where to write the pages
+        dir: PathBuf,
     },
 }
 
@@ -92,6 +137,11 @@ fn main() -> ExitCode {
             json,
             refresh,
         } => show(&package, json, refresh),
+        Command::Completions { shell } => {
+            emit(completion_script(shell));
+            Ok(())
+        }
+        Command::Man { dir } => write_man_pages(&dir),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -179,6 +229,21 @@ fn show(name: &str, json: bool, refresh: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `CommandFactory` gives us clap's description of the command line, which is
+/// also what the completions and man pages are built from. That means they can't
+/// drift out of step with what the program really accepts.
+fn completion_script(shell: Shell) -> String {
+    let mut script = Vec::new();
+    clap_complete::generate(shell, &mut Cli::command(), BINARY_NAME, &mut script);
+    String::from_utf8_lossy(&script).into_owned()
+}
+
+fn write_man_pages(dir: &Path) -> Result<()> {
+    let to_error = |e: io::Error| Error::Output(format!("{}: {e}", dir.display()));
+    fs::create_dir_all(dir).map_err(to_error)?;
+    clap_mangen::generate_to(Cli::command(), dir).map_err(to_error)
 }
 
 /// Writes a line to stdout. Unlike `println!`, this doesn't panic when the reader
@@ -488,5 +553,36 @@ mod tests {
         assert!(text.contains("Checked 4 Fedora"));
         assert!(text.contains("1 retired"));
         assert!(text.contains("2 stale"));
+    }
+
+    /// clap checks its own configuration here, catching mistakes such as two
+    /// options sharing a name, which would otherwise only show up at runtime.
+    #[test]
+    fn the_command_line_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn completions_include_the_real_commands_and_options() {
+        let script = completion_script(Shell::Bash);
+        for word in ["scan", "show", "--only", "--json", "--refresh", "at-risk"] {
+            assert!(script.contains(word), "completions are missing {word}");
+        }
+    }
+
+    #[test]
+    fn man_pages_are_written_for_each_public_command() {
+        let dir = std::env::temp_dir().join(format!("rpm-health-man-{}", process::id()));
+        write_man_pages(&dir).unwrap();
+
+        let page = |name: &str| fs::read_to_string(dir.join(name));
+        let main_page = page("rpm-health.1").unwrap();
+        let scan_page = page("rpm-health-scan.1").unwrap();
+        let hidden_page = page("rpm-health-man.1");
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert!(main_page.contains("only reads"));
+        assert!(scan_page.contains("Orphaned"));
+        assert!(hidden_page.is_err());
     }
 }
