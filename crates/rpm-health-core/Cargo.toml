@@ -7,4 +7,5 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+quick-xml.workspace = true
 reqwest.workspace = true

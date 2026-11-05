@@ -1,0 +1,163 @@
+<?xml version='1.0'?>
+<methodResponse>
+<params>
+<param>
+<value><array><data>
+<value><array><data>
+<value><array><data>
+<value><struct>
+<member>
+<name>blocked</name>
+<value><boolean>0</boolean></value>
+</member>
+<member>
+<name>extra_arches</name>
+<value><string></string></value>
+</member>
+<member>
+<name>owner_id</name>
+<value><int>2848</int></value>
+</member>
+<member>
+<name>owner_name</name>
+<value><string>nonamedotc</string></value>
+</member>
+<member>
+<name>package_id</name>
+<value><int>2056</int></value>
+</member>
+<member>
+<name>package_name</name>
+<value><string>htop</string></value>
+</member>
+<member>
+<name>tag_id</name>
+<value><int>128147</int></value>
+</member>
+<member>
+<name>tag_name</name>
+<value><string>f45</string></value>
+</member>
+</struct></value>
+</data></array></value>
+</data></array></value>
+<value><array><data>
+<value><array><data>
+<value><struct>
+<member>
+<name>blocked</name>
+<value><boolean>1</boolean></value>
+</member>
+<member>
+<name>extra_arches</name>
+<value><string></string></value>
+</member>
+<member>
+<name>owner_id</name>
+<value><int>4237</int></value>
+</member>
+<member>
+<name>owner_name</name>
+<value><string>mrc0mmand</string></value>
+</member>
+<member>
+<name>package_id</name>
+<value><int>711</int></value>
+</member>
+<member>
+<name>package_name</name>
+<value><string>linux-atm</string></value>
+</member>
+<member>
+<name>tag_id</name>
+<value><int>128147</int></value>
+</member>
+<member>
+<name>tag_name</name>
+<value><string>f45</string></value>
+</member>
+</struct></value>
+</data></array></value>
+</data></array></value>
+<value><array><data>
+<value><array><data>
+<value><struct>
+<member>
+<name>blocked</name>
+<value><boolean>1</boolean></value>
+</member>
+<member>
+<name>extra_arches</name>
+<value><string></string></value>
+</member>
+<member>
+<name>owner_id</name>
+<value><int>440</int></value>
+</member>
+<member>
+<name>owner_name</name>
+<value><string>orphan</string></value>
+</member>
+<member>
+<name>package_id</name>
+<value><int>8419</int></value>
+</member>
+<member>
+<name>package_name</name>
+<value><string>389-admin</string></value>
+</member>
+<member>
+<name>tag_id</name>
+<value><int>128147</int></value>
+</member>
+<member>
+<name>tag_name</name>
+<value><string>f45</string></value>
+</member>
+</struct></value>
+</data></array></value>
+</data></array></value>
+<value><struct>
+<member>
+<name>faultCode</name>
+<value><int>1000</int></value>
+</member>
+<member>
+<name>faultString</name>
+<value><string>No such entry in table package: rpm-health-no-such-package</string></value>
+</member>
+<member>
+<name>traceback</name>
+<value><array><data>
+<value><string>Traceback (most recent call last):
+</string></value>
+<value><string>  File "/usr/lib/python3.14/site-packages/kojihub/kojixmlrpc.py", line 366, in multiCall
+    result = self._dispatch(call['methodName'], call['params'])
+</string></value>
+<value><string>  File "/usr/lib/python3.14/site-packages/kojihub/kojixmlrpc.py", line 347, in _dispatch
+    ret = koji.util.call_with_argcheck(func, params, opts)
+</string></value>
+<value><string>  File "/usr/lib/python3.14/site-packages/koji/util.py", line 519, in call_with_argcheck
+    return func(*args, **kwargs)
+</string></value>
+<value><string>  File "/usr/lib/python3.14/site-packages/kojihub/kojihub.py", line 13806, in listPackages
+    pkgID = get_package_id(pkgID, strict=True)
+</string></value>
+<value><string>  File "/usr/lib/python3.14/site-packages/kojihub/kojihub.py", line 3689, in get_package_id
+    return get_id('package', info, strict, create)
+</string></value>
+<value><string>  File "/usr/lib/python3.14/site-packages/kojihub/kojihub.py", line 3660, in get_id
+    data = lookup_name(table, info, strict, create)
+</string></value>
+<value><string>  File "/usr/lib/python3.14/site-packages/kojihub/kojihub.py", line 3644, in lookup_name
+    raise koji.GenericError('No such entry in table %s: %s' % (table, info))
+</string></value>
+<value><string>koji.GenericError: No such entry in table package: rpm-health-no-such-package
+</string></value>
+</data></array></value>
+</member>
+</struct></value>
+</data></array></value>
+</param>
+</params>
+</methodResponse>
