@@ -8,6 +8,10 @@ pub fn dead_package_url(package: &str, branch: &str) -> String {
     format!("https://src.fedoraproject.org/rpms/{package}/raw/{branch}/f/dead.package")
 }
 
+pub fn is_dead_package_url(url: &str) -> bool {
+    url.ends_with("/f/dead.package")
+}
+
 /// Returns the retirement note, or `None` if the branch has no `dead.package`.
 pub fn dead_package_note(
     transport: &dyn Transport,

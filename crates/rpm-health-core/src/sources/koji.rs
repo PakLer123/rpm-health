@@ -23,6 +23,9 @@ const BUILDS_PER_PACKAGE: usize = 8;
 /// Only Fedora builds, not ELN, EPEL or Flatpak builds like `fc45app1`, which
 /// would otherwise use up the `BUILDS_PER_PACKAGE` window.
 const FEDORA_BUILD_PATTERN: &str = "*.fc??";
+/// How Koji says it has never heard of a package. That's a normal answer, unlike
+/// its other faults.
+const UNKNOWN_PACKAGE_FAULT: &str = "No such entry";
 /// Koji assigns packages with no maintainer to this special user.
 pub const ORPHAN_OWNER: &str = "orphan";
 
@@ -116,6 +119,18 @@ pub fn latest_versions(
     Ok(found)
 }
 
+/// Whether a response is a complete, successful answer. Koji reports errors with
+/// a normal HTTP 200, so the status alone can't tell us that.
+pub fn is_reusable_response(body: &str) -> bool {
+    let Ok(Value::Array(results)) = xmlrpc::parse_response(body) else {
+        return false;
+    };
+    results.iter().all(|result| {
+        result.get("faultString").is_none()
+            || xmlrpc::fault_message(result).starts_with(UNKNOWN_PACKAGE_FAULT)
+    })
+}
+
 /// Sends one multicall per batch and passes each package's answer to `handle`.
 ///
 /// `impl Fn` accepts any closure with this shape. `handle` is `FnMut` because
@@ -156,7 +171,7 @@ fn for_each_result(
 fn read_rows(result: &Value) -> Result<Option<&[Value]>> {
     if result.get("faultString").is_some() {
         let message = xmlrpc::fault_message(result);
-        return if message.starts_with("No such entry") {
+        return if message.starts_with(UNKNOWN_PACKAGE_FAULT) {
             Ok(None)
         } else {
             Err(Error::KojiFault(message))
@@ -404,5 +419,43 @@ mod tests {
         assert_eq!(versions["htop"], "3.5.3");
         assert_eq!(versions["vim"], "9.2.1202");
         assert_eq!(versions.len(), 2);
+    }
+
+    fn multicall_with(value: &str) -> String {
+        format!(
+            "<methodResponse><params><param><value><array><data>{value}</data></array></value>\
+             </param></params></methodResponse>"
+        )
+    }
+
+    fn fault_value(message: &str) -> String {
+        format!(
+            "<value><struct><member><name>faultString</name>\
+             <value><string>{message}</string></value></member></struct></value>"
+        )
+    }
+
+    /// The real fixture includes a package Koji doesn't know, which is fine.
+    #[test]
+    fn real_responses_are_reusable() {
+        assert!(is_reusable_response(FIXTURE));
+        assert!(is_reusable_response(BUILDS_FIXTURE));
+        assert!(is_reusable_response(LATEST_FIXTURE));
+    }
+
+    #[test]
+    fn unknown_package_answers_are_reusable() {
+        let body = multicall_with(&fault_value("No such entry in table package: x"));
+        assert!(is_reusable_response(&body));
+    }
+
+    #[test]
+    fn other_faults_and_junk_are_not_reusable() {
+        let fault = multicall_with(&fault_value("database is down"));
+        assert!(!is_reusable_response(&fault));
+        assert!(!is_reusable_response("<html>Bad gateway</html>"));
+        assert!(!is_reusable_response(
+            "<methodResponse><fault><value><struct></struct></value></fault></methodResponse>"
+        ));
     }
 }
