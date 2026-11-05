@@ -2,6 +2,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::{ContentArrangement, Table};
+use rpm_health_core::cache::{self, CacheStats, CachingTransport};
 use rpm_health_core::error::{Error, Result};
 use rpm_health_core::health::{HealthLabel, HealthReport, PackageHealth, check_health};
 use rpm_health_core::http::HttpClient;
@@ -9,6 +10,7 @@ use rpm_health_core::{dates, release, rpm};
 
 const MAX_RPMS_SHOWN: usize = 3;
 const CHANGELOG_ENTRIES_SHOWN: usize = 5;
+const SECONDS_PER_HOUR: u64 = 60 * 60;
 
 // `derive(Parser)` generates the argument parsing and `--help` text from this
 // struct. `///` doc comments become the help text, so explanations for readers
@@ -32,6 +34,9 @@ enum Command {
         /// Print machine-readable JSON, including healthy packages by default
         #[arg(long)]
         json: bool,
+        /// Fetch fresh data instead of using what's cached from the last day
+        #[arg(long)]
+        refresh: bool,
     },
     /// Show full details for one installed package
     Show {
@@ -40,6 +45,9 @@ enum Command {
         /// Print machine-readable JSON
         #[arg(long)]
         json: bool,
+        /// Fetch fresh data instead of using what's cached from the last day
+        #[arg(long)]
+        refresh: bool,
     },
 }
 
@@ -71,33 +79,55 @@ impl From<LabelFilter> for HealthLabel {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Scan { only, json } => scan(only.map(HealthLabel::from), json),
-        Command::Show { package, json } => show(&package, json),
+        Command::Scan {
+            only,
+            json,
+            refresh,
+        } => scan(only.map(HealthLabel::from), json, refresh),
+        Command::Show {
+            package,
+            json,
+            refresh,
+        } => show(&package, json, refresh),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
+            if matches!(e, Error::Parse { .. } | Error::KojiFault(_)) {
+                eprintln!("If this keeps happening, try again with --refresh.");
+            }
             ExitCode::FAILURE
         }
     }
 }
 
-fn scan(only: Option<HealthLabel>, json: bool) -> Result<()> {
+/// The cache sits between the checks and the real client, and neither one needs
+/// to know about it.
+fn build_transport(refresh: bool) -> Result<CachingTransport<HttpClient>> {
+    let dir = cache::default_dir();
+    if dir.is_none() {
+        eprintln!("warning: Neither XDG_CACHE_HOME nor HOME is set, so nothing will be cached.");
+    }
+    Ok(CachingTransport::new(HttpClient::new()?, dir, refresh))
+}
+
+fn scan(only: Option<HealthLabel>, json: bool, refresh: bool) -> Result<()> {
     let current_tag = release::current_tag()?;
     let packages = rpm::list_installed()?;
-    let transport = HttpClient::new()?;
+    let transport = build_transport(refresh)?;
 
     eprintln!(
         "Checking {} source packages against Fedora's data for {current_tag}.",
         packages.len()
     );
-    eprintln!("This takes about 8 minutes without a cache...");
+    eprintln!("This takes about 8 minutes if nothing is cached from the last day...");
     let mut report = check_health(&transport, packages, &current_tag, dates::today())?;
 
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }
+    print_cache_use(transport.stats());
     if json {
         // Scripts usually want everything, so only an explicit filter hides any.
         if let Some(label) = only {
@@ -115,7 +145,7 @@ fn scan(only: Option<HealthLabel>, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn show(name: &str, json: bool) -> Result<()> {
+fn show(name: &str, json: bool, refresh: bool) -> Result<()> {
     let package = rpm::find_package(rpm::list_installed()?, name)?;
     if !package.from_fedora {
         if json {
@@ -129,12 +159,13 @@ fn show(name: &str, json: bool) -> Result<()> {
     }
 
     let current_tag = release::current_tag()?;
-    let transport = HttpClient::new()?;
+    let transport = build_transport(refresh)?;
     let report = check_health(&transport, vec![package], &current_tag, dates::today())?;
 
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }
+    print_cache_use(transport.stats());
     for entry in &report.packages {
         if json {
             print_json(entry)?;
@@ -190,6 +221,37 @@ fn package_details(entry: &PackageHealth) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Goes to stderr like other notes, so `--json` output stays clean for scripts.
+fn print_cache_use(stats: CacheStats) {
+    eprintln!("{}", describe_cache_use(stats));
+    if stats.failed_writes > 0 {
+        eprintln!(
+            "warning: Couldn't save {} responses to the cache, so the next run will be slower.",
+            stats.failed_writes
+        );
+    }
+}
+
+fn describe_cache_use(stats: CacheStats) -> String {
+    match stats.oldest_reused_seconds {
+        Some(seconds) => format!(
+            "Made {} requests and reused {} saved responses, the oldest from {}. Use --refresh for fresh data.",
+            stats.fetched,
+            stats.reused,
+            describe_age(seconds),
+        ),
+        None => format!("Made {} requests.", stats.fetched),
+    }
+}
+
+fn describe_age(seconds: u64) -> String {
+    match seconds / SECONDS_PER_HOUR {
+        0 => "less than an hour ago".to_string(),
+        1 => "1 hour ago".to_string(),
+        hours => format!("{hours} hours ago"),
+    }
 }
 
 /// With no filter, healthy packages are left out so the problems stand out.
@@ -351,6 +413,35 @@ mod tests {
     #[test]
     fn only_shows_just_that_label() {
         assert_eq!(selected_names(Some(HealthLabel::Healthy)), ["b-healthy"]);
+    }
+
+    #[test]
+    fn cache_use_reports_how_old_the_data_is() {
+        let stats = CacheStats {
+            reused: 130,
+            fetched: 2,
+            oldest_reused_seconds: Some(5 * SECONDS_PER_HOUR),
+            failed_writes: 0,
+        };
+        let text = describe_cache_use(stats);
+        assert!(text.contains("Made 2 requests and reused 130"));
+        assert!(text.contains("5 hours ago"));
+    }
+
+    #[test]
+    fn cache_use_is_short_when_nothing_was_reused() {
+        let stats = CacheStats {
+            fetched: 7,
+            ..CacheStats::default()
+        };
+        assert_eq!(describe_cache_use(stats), "Made 7 requests.");
+    }
+
+    #[test]
+    fn ages_read_naturally() {
+        assert_eq!(describe_age(60), "less than an hour ago");
+        assert_eq!(describe_age(SECONDS_PER_HOUR), "1 hour ago");
+        assert_eq!(describe_age(23 * SECONDS_PER_HOUR), "23 hours ago");
     }
 
     #[test]
