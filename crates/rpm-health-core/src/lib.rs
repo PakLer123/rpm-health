@@ -9,3 +9,4 @@ pub mod release;
 pub mod rpm;
 pub mod signals;
 pub mod sources;
+pub mod version;
