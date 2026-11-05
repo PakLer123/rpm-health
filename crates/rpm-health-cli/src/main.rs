@@ -1,4 +1,6 @@
-use std::process::ExitCode;
+use std::fmt::Display;
+use std::io::{self, ErrorKind, Write};
+use std::process::{self, ExitCode};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::{ContentArrangement, Table};
@@ -137,11 +139,11 @@ fn scan(only: Option<HealthLabel>, json: bool, refresh: bool) -> Result<()> {
     }
     let selected = select(&report, only);
     if selected.is_empty() {
-        println!("{}", nothing_selected_message(only));
+        emit(nothing_selected_message(only));
     } else {
-        println!("{}", build_table(&selected));
+        emit(build_table(&selected));
     }
-    println!("{}", summary(&report));
+    emit(summary(&report));
     Ok(())
 }
 
@@ -151,10 +153,10 @@ fn show(name: &str, json: bool, refresh: bool) -> Result<()> {
         if json {
             return print_json(&package);
         }
-        println!(
+        emit(format!(
             "{} comes from outside Fedora, so Fedora's data can't say anything about it.",
             package.source_name
-        );
+        ));
         return Ok(());
     }
 
@@ -170,10 +172,23 @@ fn show(name: &str, json: bool, refresh: bool) -> Result<()> {
         if json {
             print_json(entry)?;
         } else {
-            println!("{}", package_details(entry));
+            emit(package_details(entry));
         }
     }
     Ok(())
+}
+
+/// Writes a line to stdout. Unlike `println!`, this doesn't panic when the reader
+/// goes away, as `head` does once it has enough. That isn't an error: the reader
+/// simply doesn't want more, so we stop quietly.
+fn emit(text: impl Display) {
+    if let Err(e) = writeln!(io::stdout(), "{text}") {
+        if e.kind() == ErrorKind::BrokenPipe {
+            process::exit(0);
+        }
+        eprintln!("error: could not write output: {e}");
+        process::exit(1);
+    }
 }
 
 /// `impl Serialize` accepts any type that serde can turn into JSON.
@@ -182,7 +197,7 @@ fn print_json(value: &impl serde::Serialize) -> Result<()> {
         what: "report while writing JSON",
         message: e.to_string(),
     })?;
-    println!("{text}");
+    emit(text);
     Ok(())
 }
 
