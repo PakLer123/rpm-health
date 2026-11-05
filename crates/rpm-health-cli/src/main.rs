@@ -92,7 +92,7 @@ fn scan(only: Option<HealthLabel>, json: bool) -> Result<()> {
         "Checking {} source packages against Fedora's data for {current_tag}.",
         packages.len()
     );
-    eprintln!("Reading upstream versions takes about 6 minutes without a cache...");
+    eprintln!("This takes about 8 minutes without a cache...");
     let mut report = check_health(&transport, packages, &current_tag, dates::today())?;
 
     for warning in &report.warnings {
