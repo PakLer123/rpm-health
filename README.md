@@ -27,13 +27,24 @@ writes is a cache of responses in your own cache directory.
 
 ## Installing
 
-There's no Fedora package yet, so for now you build it from a checkout of this
-repository. [`packaging/`](packaging/README.md) has the RPM spec and packaging steps.
+On Fedora 45 or Rawhide, install it from [COPR](https://copr.fedorainfracloud.org/coprs/pakler123/rpm-health/):
+
+```console
+$ sudo dnf copr enable pakler123/rpm-health
+$ sudo dnf install rpm-health
+```
+
+This includes the man pages and shell completions. COPR is a community build service,
+so this isn't an official Fedora package yet.
+
+To build from a checkout of this repository instead:
 
 ```console
 $ sudo dnf install cargo gcc openssl-devel
 $ cargo install --locked --path crates/rpm-health-cli
 ```
+
+[`packaging/`](packaging/README.md) has the RPM spec and packaging steps.
 
 ## Usage
 
@@ -50,6 +61,8 @@ has no way to look up many packages at once. Later scans reuse saved responses a
 take a couple of seconds.
 
 ### Shell completions and man pages
+
+The COPR package already includes these. If you built from source, install them with:
 
 ```console
 $ mkdir -p ~/.local/share/bash-completion/completions
@@ -163,7 +176,7 @@ $ cargo test --workspace
 
 ## Roadmap
 
-- Fedora packaging: COPR, then a package review request
+- A Fedora package review request
 - A systemd timer and desktop notifications
 - A GTK4 and libadwaita front-end
 
