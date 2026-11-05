@@ -164,11 +164,11 @@ mod tests {
         let transport = FakeTransport::default().with_post_reply(FIXTURE);
         let found = list_packages(&transport, "f45", &fixture_names()).unwrap();
 
-        assert_eq!(found["htop"].blocked, false);
+        assert!(!found["htop"].blocked);
         // Retired, yet still owned by a person. The owner alone isn't enough.
-        assert_eq!(found["linux-atm"].blocked, true);
+        assert!(found["linux-atm"].blocked);
         assert!(!found["linux-atm"].is_orphaned());
-        assert_eq!(found["389-admin"].blocked, true);
+        assert!(found["389-admin"].blocked);
         assert!(found["389-admin"].is_orphaned());
     }
 

@@ -6,4 +6,5 @@ pub mod http;
 pub mod model;
 pub mod release;
 pub mod rpm;
+pub mod signals;
 pub mod sources;
