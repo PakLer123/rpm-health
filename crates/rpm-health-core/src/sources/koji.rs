@@ -88,6 +88,34 @@ pub fn recent_builds(
     Ok(found)
 }
 
+/// Returns the newest version of each package in a tag, such as `f46` for
+/// Rawhide. Packages that have no build in that tag are absent from the map.
+pub fn latest_versions(
+    transport: &dyn Transport,
+    tag: &str,
+    names: &[String],
+) -> Result<HashMap<String, String>> {
+    let mut found = HashMap::new();
+    for_each_result(
+        transport,
+        names,
+        BATCH_SIZE,
+        |name| latest_build_call(tag, name),
+        |name, result| {
+            let rows = read_rows(result)?.unwrap_or_default();
+            if let Some(row) = rows.first() {
+                let version = row
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| parse_error("build row is missing version"))?;
+                found.insert(name.to_string(), version.to_string());
+            }
+            Ok(())
+        },
+    )?;
+    Ok(found)
+}
+
 /// Sends one multicall per batch and passes each package's answer to `handle`.
 ///
 /// `impl Fn` accepts any closure with this shape. `handle` is `FnMut` because
@@ -233,6 +261,21 @@ fn list_builds_call(name: &str) -> String {
     )
 }
 
+fn latest_build_call(tag: &str, name: &str) -> String {
+    format!(
+        "<value><struct>\
+         <member><name>methodName</name><value><string>getLatestBuilds</string></value></member>\
+         <member><name>params</name><value><array><data><value><struct>\
+         <member><name>tag</name><value><string>{tag}</string></value></member>\
+         <member><name>package</name><value><string>{name}</string></value></member>\
+         <member><name>__starstar</name><value><boolean>1</boolean></value></member>\
+         </struct></value></data></array></value></member>\
+         </struct></value>",
+        tag = escape(tag),
+        name = escape(name),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +389,20 @@ mod tests {
             Value::Double(1784145625.1),
         )]));
         assert!(matches!(read_build(&row), Some(Err(Error::Parse { .. }))));
+    }
+
+    /// A real response for htop, vim, and a name that doesn't exist.
+    const LATEST_FIXTURE: &str = include_str!("../../tests/fixtures/koji_latest_builds.xml");
+
+    #[test]
+    fn reads_latest_versions_from_a_real_response() {
+        let transport = FakeTransport::default().with_post_reply(LATEST_FIXTURE);
+        let names = ["htop", "vim", "rpm-health-no-such-package"].map(String::from);
+
+        let versions = latest_versions(&transport, "f45-updates", &names).unwrap();
+
+        assert_eq!(versions["htop"], "3.5.3");
+        assert_eq!(versions["vim"], "9.2.1202");
+        assert_eq!(versions.len(), 2);
     }
 }
