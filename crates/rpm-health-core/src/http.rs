@@ -55,6 +55,11 @@ impl HttpClient {
         let client = reqwest::blocking::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(TIMEOUT)
+            // Don't reuse connections. Fedora's servers can close an idle one at
+            // the moment we try to reuse it, which fails the request with
+            // "connection closed before message completed". Our requests are
+            // few and sequential, so a new connection each time costs very little.
+            .pool_max_idle_per_host(0)
             .build()
             .map_err(|e| Error::Http {
                 url: "(client setup)".to_string(),
