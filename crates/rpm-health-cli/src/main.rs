@@ -92,7 +92,7 @@ fn scan(only: Option<HealthLabel>, json: bool) -> Result<()> {
         "Checking {} source packages against Fedora's data for {current_tag}.",
         packages.len()
     );
-    eprintln!("Reading upstream versions takes about 5 minutes without a cache...");
+    eprintln!("Reading upstream versions takes about 6 minutes without a cache...");
     let mut report = check_health(&transport, packages, &current_tag, dates::today())?;
 
     for warning in &report.warnings {
@@ -351,6 +351,16 @@ mod tests {
     #[test]
     fn only_shows_just_that_label() {
         assert_eq!(selected_names(Some(HealthLabel::Healthy)), ["b-healthy"]);
+    }
+
+    #[test]
+    fn the_table_shows_the_rpm_label_and_reason() {
+        let scan = report();
+        let text = build_table(&select(&scan, None)).to_string();
+        assert!(text.contains("c-retired"));
+        assert!(text.contains("Retired"));
+        assert!(text.contains("Because"));
+        assert!(!text.contains("b-healthy"));
     }
 
     #[test]
