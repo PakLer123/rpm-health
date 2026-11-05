@@ -8,6 +8,7 @@ use rpm_health_core::http::HttpClient;
 use rpm_health_core::{dates, release, rpm};
 
 const MAX_RPMS_SHOWN: usize = 3;
+const CHANGELOG_ENTRIES_SHOWN: usize = 5;
 
 // `derive(Parser)` generates the argument parsing and `--help` text from this
 // struct. `///` doc comments become the help text, so explanations for readers
@@ -28,6 +29,11 @@ enum Command {
         /// Only list packages with this health label
         #[arg(long, value_enum)]
         only: Option<LabelFilter>,
+    },
+    /// Show full details for one installed package
+    Show {
+        /// An RPM name or source package name
+        package: String,
     },
 }
 
@@ -60,6 +66,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Scan { only } => scan(only.map(HealthLabel::from)),
+        Command::Show { package } => show(&package),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -93,6 +100,67 @@ fn scan(only: Option<HealthLabel>) -> Result<()> {
     }
     println!("{}", summary(&report));
     Ok(())
+}
+
+fn show(name: &str) -> Result<()> {
+    let package = rpm::find_package(rpm::list_installed()?, name)?;
+    if !package.from_fedora {
+        println!(
+            "{} comes from outside Fedora, so Fedora's data can't say anything about it.",
+            package.source_name
+        );
+        return Ok(());
+    }
+
+    let current_tag = release::current_tag()?;
+    let transport = HttpClient::new()?;
+    let report = check_health(&transport, vec![package], &current_tag, dates::today())?;
+
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+    for entry in &report.packages {
+        println!("{}", package_details(entry));
+    }
+    Ok(())
+}
+
+fn package_details(entry: &PackageHealth) -> String {
+    let package = &entry.package;
+    let mut lines = vec![
+        format!(
+            "{} ({})",
+            package.source_name,
+            format_args!("https://src.fedoraproject.org/rpms/{}", package.source_name)
+        ),
+        format!("  Health:      {}: {}", entry.label.name(), entry.reason),
+        format!("  RPMs:        {}", package.binaries.join(", ")),
+        format!("  Version:     {}", package.versions.join(", ")),
+        format!(
+            "  Maintainer:  {}: {}",
+            entry.maintainer.label(),
+            entry.maintainer.reason()
+        ),
+        format!(
+            "  Activity:    {}: {}",
+            entry.activity.label(),
+            entry.activity.detail()
+        ),
+        format!(
+            "  Upstream:    {}: {}",
+            entry.upstream.label(),
+            entry.upstream.detail()
+        ),
+    ];
+
+    if !package.changelog.is_empty() {
+        lines.push("  Recent changelog:".to_string());
+        for change in package.changelog.iter().take(CHANGELOG_ENTRIES_SHOWN) {
+            let first_line = change.text.lines().next().unwrap_or_default();
+            lines.push(format!("    {}  {first_line}", change.date));
+        }
+    }
+    lines.join("\n")
 }
 
 /// With no filter, healthy packages are left out so the problems stand out.
@@ -253,6 +321,16 @@ mod tests {
     #[test]
     fn only_shows_just_that_label() {
         assert_eq!(selected_names(Some(HealthLabel::Healthy)), ["b-healthy"]);
+    }
+
+    #[test]
+    fn details_show_every_signal() {
+        let text = package_details(&entry("demo", HealthLabel::Stale));
+        assert!(text.contains("https://src.fedoraproject.org/rpms/demo"));
+        assert!(text.contains("Health:      Stale: Because"));
+        assert!(text.contains("Maintainer:  Maintained"));
+        assert!(text.contains("Activity:    Unknown"));
+        assert!(text.contains("Upstream:    Not tracked"));
     }
 
     #[test]

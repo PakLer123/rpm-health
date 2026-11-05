@@ -11,6 +11,9 @@ pub enum Error {
     #[error("could not read the installed package list: {0}")]
     Rpm(String),
 
+    #[error("{0} isn't installed. Try the name of an RPM or its source package.")]
+    NotInstalled(String),
+
     #[error("could not work out this system's Fedora release: {0}")]
     OsRelease(String),
 

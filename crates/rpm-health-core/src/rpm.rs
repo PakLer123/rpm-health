@@ -95,6 +95,17 @@ pub fn parse_rpm_output(output: &str) -> Result<Vec<InstalledPackage>> {
     Ok(packages)
 }
 
+/// Finds a package by its source package name or any of its RPM names, since
+/// people usually know the name of the RPM they installed.
+pub fn find_package(packages: Vec<InstalledPackage>, name: &str) -> Result<InstalledPackage> {
+    packages
+        .into_iter()
+        .find(|package| {
+            package.source_name == name || package.binaries.iter().any(|binary| binary == name)
+        })
+        .ok_or_else(|| Error::NotInstalled(name.to_string()))
+}
+
 /// Entries that can't be read are skipped, since one bad entry shouldn't stop a
 /// scan. Packages without a changelog simply give an empty list.
 fn parse_changelog(text: &str) -> Vec<ChangelogEntry> {
@@ -249,5 +260,20 @@ fedora-part\t1.0-1.fc45\tffmpeg-1.0-1.fc45.src.rpm\tFedora Project\t\x1d\
 fusion-part\t2.0-1.fc45\tffmpeg-2.0-1.fc45.src.rpm\tRPM Fusion\t\x1d";
         let packages = parse_rpm_output(output).unwrap();
         assert_eq!(packages[0].fedora_version.as_deref(), Some("1.0"));
+    }
+
+    #[test]
+    fn finds_a_package_by_source_or_rpm_name() {
+        let by_source = find_package(parse_rpm_output(&sample()).unwrap(), "aalib").unwrap();
+        let by_rpm = find_package(parse_rpm_output(&sample()).unwrap(), "aalib-libs").unwrap();
+        assert_eq!(by_source, by_rpm);
+    }
+
+    #[test]
+    fn a_package_that_is_not_installed_is_an_error() {
+        assert!(matches!(
+            find_package(parse_rpm_output(&sample()).unwrap(), "nope"),
+            Err(Error::NotInstalled(_))
+        ));
     }
 }
