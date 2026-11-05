@@ -14,6 +14,20 @@ pub struct InstalledPackage {
     /// Usually one entry, but `kernel` often has several versions installed.
     pub versions: Vec<String>,
     pub from_fedora: bool,
+    /// Newest first. Only from Fedora's own RPMs, so a third-party RPM sharing
+    /// this source name can't make the package look active.
+    pub changelog: Vec<ChangelogEntry>,
+}
+
+/// One entry from an RPM's changelog.
+///
+/// `derive(Ord)` compares fields in the order they're declared, so sorting
+/// these sorts by date first.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ChangelogEntry {
+    pub date: Date,
+    pub author: String,
+    pub text: String,
 }
 
 /// The result of the maintainer signal for one package.
