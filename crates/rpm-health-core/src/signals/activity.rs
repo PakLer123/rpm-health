@@ -319,6 +319,7 @@ mod tests {
             binaries: vec![name.to_string()],
             versions: vec!["1-1.fc45".to_string()],
             from_fedora: true,
+            fedora_version: None,
             changelog,
         }
     }

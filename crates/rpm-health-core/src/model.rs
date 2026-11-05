@@ -1,5 +1,7 @@
 use time::{Date, Duration};
 
+use crate::version::Gap;
+
 /// Fedora retires packages that stay orphaned for this long.
 const ORPHAN_GRACE_PERIOD: Duration = Duration::weeks(6);
 
@@ -14,6 +16,9 @@ pub struct InstalledPackage {
     /// Usually one entry, but `kernel` often has several versions installed.
     pub versions: Vec<String>,
     pub from_fedora: bool,
+    /// The newest upstream version installed from Fedora, without the release
+    /// part, for comparing against upstream.
+    pub fedora_version: Option<String>,
     /// Newest first. Only from Fedora's own RPMs, so a third-party RPM sharing
     /// this source name can't make the package look active.
     pub changelog: Vec<ChangelogEntry>,
@@ -124,6 +129,13 @@ impl ActivityStatus {
         }
     }
 
+    pub fn is_quiet(&self) -> bool {
+        matches!(
+            self,
+            ActivityStatus::Quiet { .. } | ActivityStatus::QuietSince { .. }
+        )
+    }
+
     /// A human-readable description of the last known activity.
     pub fn detail(&self) -> String {
         match self {
@@ -134,6 +146,90 @@ impl ActivityStatus {
                 format!("None found back to {checked_back_to}")
             }
             ActivityStatus::Unknown { reason } => reason.clone(),
+        }
+    }
+}
+
+/// The result of the upstream gap signal for one package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpstreamStatus {
+    UpToDate {
+        upstream: String,
+    },
+    Behind {
+        upstream: String,
+        /// How far the installed version is behind upstream.
+        gap: Gap,
+        /// The newest version in Rawhide, if we could find out.
+        rawhide: Option<String>,
+        /// How far Fedora as a whole is behind. `None` means Rawhide has caught
+        /// up, which is often just Fedora's policy of saving big updates for
+        /// the next release rather than a sign of neglect.
+        fedora_gap: Option<Gap>,
+    },
+    /// Tracked, but a fair comparison isn't possible.
+    NotComparable {
+        upstream: Option<String>,
+        reason: String,
+    },
+    /// release-monitoring.org has no mapping for this package.
+    NotTracked,
+    /// We couldn't ask, so we know nothing either way.
+    NotChecked {
+        reason: String,
+    },
+}
+
+impl UpstreamStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            UpstreamStatus::UpToDate { .. } => "Up to date",
+            UpstreamStatus::Behind { .. } => "Behind",
+            UpstreamStatus::NotComparable { .. } => "Can't compare",
+            UpstreamStatus::NotTracked => "Not tracked",
+            UpstreamStatus::NotChecked { .. } => "Not checked",
+        }
+    }
+
+    /// True for a major version gap that Rawhide hasn't closed either.
+    pub fn is_well_behind(&self) -> bool {
+        matches!(
+            self,
+            UpstreamStatus::Behind {
+                fedora_gap: Some(Gap::Major),
+                ..
+            }
+        )
+    }
+
+    /// A human-readable description of the status.
+    pub fn detail(&self) -> String {
+        match self {
+            UpstreamStatus::UpToDate { upstream } => format!("Matches upstream {upstream}"),
+            UpstreamStatus::Behind {
+                upstream,
+                rawhide,
+                fedora_gap,
+                ..
+            } => match (fedora_gap, rawhide) {
+                (None, _) => format!("Upstream is at {upstream}, and Rawhide already has it"),
+                (Some(_), Some(rawhide)) => {
+                    format!("Upstream is at {upstream}, and Rawhide has {rawhide}")
+                }
+                (Some(_), None) => format!("Upstream is at {upstream}"),
+            },
+            UpstreamStatus::NotComparable {
+                upstream: Some(upstream),
+                reason,
+            } => format!("Upstream reports {upstream}, but {reason}"),
+            UpstreamStatus::NotComparable {
+                upstream: None,
+                reason,
+            } => reason.clone(),
+            UpstreamStatus::NotTracked => {
+                "Upstream isn't tracked by release-monitoring.org".to_string()
+            }
+            UpstreamStatus::NotChecked { reason } => reason.clone(),
         }
     }
 }

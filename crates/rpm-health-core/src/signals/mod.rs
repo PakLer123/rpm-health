@@ -2,3 +2,4 @@
 
 pub mod activity;
 pub mod maintainer;
+pub mod upstream;

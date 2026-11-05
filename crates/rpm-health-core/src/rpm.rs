@@ -1,9 +1,11 @@
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::process::Command;
 
 use crate::dates::date_from_unix;
 use crate::error::{Error, Result};
 use crate::model::{ChangelogEntry, InstalledPackage};
+use crate::version::compare_versions;
 
 // Changelog text can contain newlines and tabs, so records and entries end with
 // ASCII control characters that real text doesn't use. The `[...]` part repeats
@@ -61,12 +63,20 @@ pub fn parse_rpm_output(output: &str) -> Result<Vec<InstalledPackage>> {
                 binaries: Vec::new(),
                 versions: Vec::new(),
                 from_fedora: false,
+                fedora_version: None,
                 changelog: Vec::new(),
             });
         entry.binaries.push(name.to_string());
         entry.versions.push(version.to_string());
         if vendor == FEDORA_VENDOR {
             entry.from_fedora = true;
+            let upstream_version = version.rsplit_once('-').map_or(version, |(v, _release)| v);
+            let is_newer = entry.fedora_version.as_deref().is_none_or(|current| {
+                compare_versions(upstream_version, current) == Ordering::Greater
+            });
+            if is_newer {
+                entry.fedora_version = Some(upstream_version.to_string());
+            }
             entry.changelog.extend(parse_changelog(changelog));
         }
     }
@@ -221,5 +231,23 @@ fusion-part\t1-1.fc45\tffmpeg-1-1.fc45.src.rpm\tRPM Fusion\t1784116800\x1fB\x1f-
         let entries = parse_changelog("not-a-number\x1fA\x1f- x\x1e1700000000\x1fB\x1f- y\x1e");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, "- y");
+    }
+
+    #[test]
+    fn fedora_version_is_the_newest_without_its_release() {
+        let packages = parse_rpm_output(&sample()).unwrap();
+        assert_eq!(
+            find(&packages, "kernel").fedora_version.as_deref(),
+            Some("7.2.15")
+        );
+    }
+
+    #[test]
+    fn third_party_rpms_do_not_set_the_fedora_version() {
+        let output = "\
+fedora-part\t1.0-1.fc45\tffmpeg-1.0-1.fc45.src.rpm\tFedora Project\t\x1d\
+fusion-part\t2.0-1.fc45\tffmpeg-2.0-1.fc45.src.rpm\tRPM Fusion\t\x1d";
+        let packages = parse_rpm_output(output).unwrap();
+        assert_eq!(packages[0].fedora_version.as_deref(), Some("1.0"));
     }
 }
