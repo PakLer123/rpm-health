@@ -159,9 +159,8 @@ fn package_details(entry: &PackageHealth) -> String {
     let package = &entry.package;
     let mut lines = vec![
         format!(
-            "{} ({})",
-            package.source_name,
-            format_args!("https://src.fedoraproject.org/rpms/{}", package.source_name)
+            "{0} (https://src.fedoraproject.org/rpms/{0})",
+            package.source_name
         ),
         format!("  Health:      {}: {}", entry.label.name(), entry.reason),
         format!("  RPMs:        {}", package.binaries.join(", ")),
