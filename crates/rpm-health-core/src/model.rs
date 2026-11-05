@@ -1,3 +1,4 @@
+use serde::Serialize;
 use time::{Date, Duration};
 
 use crate::version::Gap;
@@ -9,7 +10,7 @@ const ORPHAN_GRACE_PERIOD: Duration = Duration::weeks(6);
 ///
 /// Fedora tracks maintainers per source package, so `kernel-core` and
 /// `kernel-modules` both end up here under the source package `kernel`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InstalledPackage {
     pub source_name: String,
     pub binaries: Vec<String>,
@@ -20,7 +21,9 @@ pub struct InstalledPackage {
     /// part, for comparing against upstream.
     pub fedora_version: Option<String>,
     /// Newest first. Only from Fedora's own RPMs, so a third-party RPM sharing
-    /// this source name can't make the package look active.
+    /// this source name can't make the package look active. Left out of JSON,
+    /// because `rpm -q --changelog` already provides it and it's very long.
+    #[serde(skip)]
     pub changelog: Vec<ChangelogEntry>,
 }
 
@@ -41,7 +44,8 @@ pub struct ChangelogEntry {
 /// variant can carry its own data. `match` must handle every variant, so
 /// adding a new status later makes the compiler point at all the code that
 /// needs updating.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum MaintainerStatus {
     Maintained,
     /// `since` comes from the orphan report, when it has this package.
@@ -101,7 +105,8 @@ impl MaintainerStatus {
 ///
 /// Being quiet isn't a verdict. A finished, stable package can go years without
 /// needing changes, so this is only one input to a package's overall health.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum ActivityStatus {
     /// Changed recently by something other than a Fedora-wide mass rebuild.
     Active {
@@ -151,7 +156,8 @@ impl ActivityStatus {
 }
 
 /// The result of the upstream gap signal for one package.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum UpstreamStatus {
     UpToDate {
         upstream: String,

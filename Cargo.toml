@@ -24,6 +24,6 @@ serde_json = "1"
 thiserror = "2"
 # Date parsing, formatting and arithmetic, which is too easy to get subtly wrong
 # by hand. Only the features we use are enabled.
-time = { version = "0.3", default-features = false, features = ["std", "formatting", "parsing"] }
+time = { version = "0.3", default-features = false, features = ["std", "formatting", "parsing", "serde-human-readable"] }
 
 rpm-health-core = { path = "crates/rpm-health-core" }

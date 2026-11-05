@@ -14,3 +14,5 @@ path = "src/main.rs"
 rpm-health-core.workspace = true
 clap.workspace = true
 comfy-table.workspace = true
+serde.workspace = true
+serde_json.workspace = true

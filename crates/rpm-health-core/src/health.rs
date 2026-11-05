@@ -4,6 +4,7 @@
 //! unhealthy, because a finished, stable tool can go years without changes, so a
 //! quiet package that matches upstream is healthy.
 
+use serde::Serialize;
 use time::Date;
 
 use crate::error::Result;
@@ -16,7 +17,8 @@ use crate::sources::bodhi;
 
 /// The overall verdict for a package, most urgent first. `derive(Ord)` follows
 /// this order, so sorting by label puts the most urgent packages at the top.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HealthLabel {
     Retired,
     Orphaned,
@@ -40,7 +42,7 @@ impl HealthLabel {
 }
 
 /// Everything we know about one package.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct PackageHealth {
     pub package: InstalledPackage,
     pub label: HealthLabel,
@@ -50,8 +52,12 @@ pub struct PackageHealth {
     pub upstream: UpstreamStatus,
 }
 
-#[derive(Debug)]
+/// Bumped whenever the JSON output changes in a way that could break scripts.
+pub const JSON_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize)]
 pub struct HealthReport {
+    pub schema_version: u32,
     pub release: String,
     /// One entry per Fedora package, sorted by name.
     pub packages: Vec<PackageHealth>,
@@ -116,6 +122,7 @@ pub fn check_health(
         .collect();
 
     Ok(HealthReport {
+        schema_version: JSON_SCHEMA_VERSION,
         release: current_tag.to_string(),
         packages,
         third_party: maintainers.third_party,
@@ -421,5 +428,38 @@ mod tests {
         assert_eq!(report.third_party.len(), 1);
         // Bodhi, the orphan report, and release-monitoring.org.
         assert_eq!(report.warnings.len(), 3);
+    }
+
+    #[test]
+    fn json_output_has_a_stable_readable_shape() {
+        let entry = PackageHealth {
+            package: InstalledPackage {
+                source_name: "demo".to_string(),
+                binaries: vec!["demo-libs".to_string()],
+                versions: vec!["1.0-1.fc45".to_string()],
+                from_fedora: true,
+                fedora_version: Some("1.0".to_string()),
+                changelog: vec![crate::model::ChangelogEntry {
+                    date: date(),
+                    author: "Alice".to_string(),
+                    text: "- Secret".to_string(),
+                }],
+            },
+            label: HealthLabel::AtRisk,
+            reason: "Because".to_string(),
+            maintainer: MaintainerStatus::Maintained,
+            activity: quiet(),
+            upstream: behind(Some(Gap::Major)),
+        };
+
+        let json = serde_json::to_value(&entry).unwrap();
+
+        assert_eq!(json["label"], "at_risk");
+        assert_eq!(json["maintainer"]["status"], "maintained");
+        assert_eq!(json["activity"]["status"], "quiet");
+        assert_eq!(json["activity"]["last_change"], "2024-05-25");
+        assert_eq!(json["upstream"]["fedora_gap"], "major");
+        assert_eq!(json["package"]["source_name"], "demo");
+        assert!(json["package"].get("changelog").is_none());
     }
 }

@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::{ContentArrangement, Table};
-use rpm_health_core::error::Result;
+use rpm_health_core::error::{Error, Result};
 use rpm_health_core::health::{HealthLabel, HealthReport, PackageHealth, check_health};
 use rpm_health_core::http::HttpClient;
 use rpm_health_core::{dates, release, rpm};
@@ -29,11 +29,17 @@ enum Command {
         /// Only list packages with this health label
         #[arg(long, value_enum)]
         only: Option<LabelFilter>,
+        /// Print machine-readable JSON, including healthy packages by default
+        #[arg(long)]
+        json: bool,
     },
     /// Show full details for one installed package
     Show {
         /// An RPM name or source package name
         package: String,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -65,8 +71,8 @@ impl From<LabelFilter> for HealthLabel {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Scan { only } => scan(only.map(HealthLabel::from)),
-        Command::Show { package } => show(&package),
+        Command::Scan { only, json } => scan(only.map(HealthLabel::from), json),
+        Command::Show { package, json } => show(&package, json),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -77,7 +83,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn scan(only: Option<HealthLabel>) -> Result<()> {
+fn scan(only: Option<HealthLabel>, json: bool) -> Result<()> {
     let current_tag = release::current_tag()?;
     let packages = rpm::list_installed()?;
     let transport = HttpClient::new()?;
@@ -87,10 +93,17 @@ fn scan(only: Option<HealthLabel>) -> Result<()> {
         packages.len()
     );
     eprintln!("Reading upstream versions takes about 5 minutes without a cache...");
-    let report = check_health(&transport, packages, &current_tag, dates::today())?;
+    let mut report = check_health(&transport, packages, &current_tag, dates::today())?;
 
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
+    }
+    if json {
+        // Scripts usually want everything, so only an explicit filter hides any.
+        if let Some(label) = only {
+            report.packages.retain(|entry| entry.label == label);
+        }
+        return print_json(&report);
     }
     let selected = select(&report, only);
     if selected.is_empty() {
@@ -102,9 +115,12 @@ fn scan(only: Option<HealthLabel>) -> Result<()> {
     Ok(())
 }
 
-fn show(name: &str) -> Result<()> {
+fn show(name: &str, json: bool) -> Result<()> {
     let package = rpm::find_package(rpm::list_installed()?, name)?;
     if !package.from_fedora {
+        if json {
+            return print_json(&package);
+        }
         println!(
             "{} comes from outside Fedora, so Fedora's data can't say anything about it.",
             package.source_name
@@ -120,8 +136,22 @@ fn show(name: &str) -> Result<()> {
         eprintln!("warning: {warning}");
     }
     for entry in &report.packages {
-        println!("{}", package_details(entry));
+        if json {
+            print_json(entry)?;
+        } else {
+            println!("{}", package_details(entry));
+        }
     }
+    Ok(())
+}
+
+/// `impl Serialize` accepts any type that serde can turn into JSON.
+fn print_json(value: &impl serde::Serialize) -> Result<()> {
+    let text = serde_json::to_string_pretty(value).map_err(|e| Error::Parse {
+        what: "report while writing JSON",
+        message: e.to_string(),
+    })?;
+    println!("{text}");
     Ok(())
 }
 
@@ -294,6 +324,7 @@ mod tests {
 
     fn report() -> HealthReport {
         HealthReport {
+            schema_version: 1,
             release: "f45".to_string(),
             packages: vec![
                 entry("a-stale", HealthLabel::Stale),
