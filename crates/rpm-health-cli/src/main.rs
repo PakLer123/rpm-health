@@ -194,7 +194,7 @@ fn activity_summary(report: &ActivityReport) -> String {
             .count()
     };
     format!(
-        "{} active, {} quiet, {} unknown. Quiet means no changes in two years, which is normal for finished, stable software.",
+        "{} active, {} quiet, {} unknown. Quiet means no changes in two years, which can be fine for finished, stable software.",
         count("Active"),
         count("Quiet"),
         count("Unknown"),
