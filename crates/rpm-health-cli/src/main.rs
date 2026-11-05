@@ -1,12 +1,10 @@
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::{ContentArrangement, Table};
 use rpm_health_core::error::Result;
+use rpm_health_core::health::{HealthLabel, HealthReport, PackageHealth, check_health};
 use rpm_health_core::http::HttpClient;
-use rpm_health_core::model::{ActivityStatus, InstalledPackage, MaintainerStatus, PackageStatus};
-use rpm_health_core::signals::activity::{ActivityReport, PackageActivity, check_activity};
-use rpm_health_core::signals::maintainer::{MaintainerReport, check_maintainers};
 use rpm_health_core::{dates, release, rpm};
 
 const MAX_RPMS_SHOWN: usize = 3;
@@ -26,13 +24,42 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Check all installed packages and list the ones that need attention
-    Scan,
+    Scan {
+        /// Only list packages with this health label
+        #[arg(long, value_enum)]
+        only: Option<LabelFilter>,
+    },
+}
+
+// The core library doesn't know about clap, so the command line has its own
+// list of labels, and `From` converts between the two.
+#[derive(Clone, Copy, ValueEnum)]
+enum LabelFilter {
+    Retired,
+    Orphaned,
+    AtRisk,
+    Stale,
+    Unknown,
+    Healthy,
+}
+
+impl From<LabelFilter> for HealthLabel {
+    fn from(filter: LabelFilter) -> Self {
+        match filter {
+            LabelFilter::Retired => HealthLabel::Retired,
+            LabelFilter::Orphaned => HealthLabel::Orphaned,
+            LabelFilter::AtRisk => HealthLabel::AtRisk,
+            LabelFilter::Stale => HealthLabel::Stale,
+            LabelFilter::Unknown => HealthLabel::Unknown,
+            LabelFilter::Healthy => HealthLabel::Healthy,
+        }
+    }
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Scan => scan(),
+        Command::Scan { only } => scan(only.map(HealthLabel::from)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -43,71 +70,55 @@ fn main() -> ExitCode {
     }
 }
 
-fn scan() -> Result<()> {
+fn scan(only: Option<HealthLabel>) -> Result<()> {
     let current_tag = release::current_tag()?;
     let packages = rpm::list_installed()?;
     let transport = HttpClient::new()?;
 
     eprintln!(
-        "Checking {} source packages against Fedora's data for {current_tag}...",
+        "Checking {} source packages against Fedora's data for {current_tag}.",
         packages.len()
     );
-    let maintainers = check_maintainers(&transport, packages, &current_tag)?;
+    eprintln!("Reading upstream versions takes about 5 minutes without a cache...");
+    let report = check_health(&transport, packages, &current_tag, dates::today())?;
 
-    let fedora_packages: Vec<&InstalledPackage> = maintainers
-        .statuses
-        .iter()
-        .map(|entry| &entry.package)
-        .collect();
-    let activity = check_activity(&transport, &fedora_packages, dates::today());
-
-    print_maintainers(&maintainers);
-    println!();
-    print_activity(&activity);
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+    let selected = select(&report, only);
+    if selected.is_empty() {
+        println!("{}", nothing_selected_message(only));
+    } else {
+        println!("{}", build_table(&selected));
+    }
+    println!("{}", summary(&report));
     Ok(())
 }
 
-fn print_maintainers(report: &MaintainerReport) {
-    for warning in &report.warnings {
-        eprintln!("warning: {warning}");
-    }
-
-    let needing_attention: Vec<&PackageStatus> = report
-        .statuses
+/// With no filter, healthy packages are left out so the problems stand out.
+/// The most urgent packages come first.
+fn select(report: &HealthReport, only: Option<HealthLabel>) -> Vec<&PackageHealth> {
+    let mut selected: Vec<&PackageHealth> = report
+        .packages
         .iter()
-        .filter(|entry| entry.status != MaintainerStatus::Maintained)
+        .filter(|entry| match only {
+            Some(label) => entry.label == label,
+            None => entry.label != HealthLabel::Healthy,
+        })
         .collect();
-
-    println!("Maintainer status");
-    if needing_attention.is_empty() {
-        println!("No packages need attention.");
-    } else {
-        println!("{}", build_table(&needing_attention));
-    }
-    println!("{}", summary(report));
+    // This sort keeps equal items in their existing order, which is by name.
+    selected.sort_by_key(|entry| entry.label);
+    selected
 }
 
-fn print_activity(report: &ActivityReport) {
-    for warning in &report.warnings {
-        eprintln!("warning: {warning}");
+fn nothing_selected_message(only: Option<HealthLabel>) -> String {
+    match only {
+        Some(label) => format!("No packages are labelled {}.", label.name()),
+        None => "No packages need attention.".to_string(),
     }
-
-    let not_active: Vec<&PackageActivity> = report
-        .statuses
-        .iter()
-        .filter(|entry| !matches!(entry.status, ActivityStatus::Active { .. }))
-        .collect();
-
-    println!("Fedora activity");
-    if not_active.is_empty() {
-        println!("All packages have changed recently.");
-    } else {
-        println!("{}", build_activity_table(&not_active));
-    }
-    println!("{}", activity_summary(report));
 }
 
-fn build_table(entries: &[&PackageStatus]) -> Table {
+fn build_table(entries: &[&PackageHealth]) -> Table {
     let mut table = Table::new();
     table
         .set_content_arrangement(ContentArrangement::Dynamic)
@@ -115,37 +126,16 @@ fn build_table(entries: &[&PackageStatus]) -> Table {
             "Source package",
             "Installed RPMs",
             "Version",
-            "Status",
-            "Reason",
+            "Health",
+            "Why",
         ]);
     for entry in entries {
         table.add_row([
             entry.package.source_name.clone(),
             summarize_rpms(&entry.package.binaries),
             entry.package.versions.join(", "),
-            entry.status.label().to_string(),
-            entry.status.reason(),
-        ]);
-    }
-    table
-}
-
-fn build_activity_table(entries: &[&PackageActivity]) -> Table {
-    let mut table = Table::new();
-    table
-        .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header([
-            "Source package",
-            "Installed RPMs",
-            "Status",
-            "Last change (excluding mass rebuilds)",
-        ]);
-    for entry in entries {
-        table.add_row([
-            entry.package.source_name.clone(),
-            summarize_rpms(&entry.package.binaries),
-            entry.status.label().to_string(),
-            entry.status.detail(),
+            entry.label.name().to_string(),
+            entry.reason.clone(),
         ]);
     }
     table
@@ -165,44 +155,33 @@ fn summarize_rpms(binaries: &[String]) -> String {
     }
 }
 
-fn summary(report: &MaintainerReport) -> String {
-    let count = |label: &str| {
+fn summary(report: &HealthReport) -> String {
+    let count = |label: HealthLabel| {
         report
-            .statuses
+            .packages
             .iter()
-            .filter(|entry| entry.status.label() == label)
+            .filter(|entry| entry.label == label)
             .count()
     };
     format!(
-        "Checked {} Fedora source packages: {} retired, {} retiring, {} orphaned, {} unknown, {} maintained. Skipped {} third-party.",
-        report.statuses.len(),
-        count("Retired"),
-        count("Retiring"),
-        count("Orphaned"),
-        count("Unknown"),
-        count("Maintained"),
+        "Checked {} Fedora source packages: {} retired, {} orphaned, {} at risk, {} stale, {} unknown, {} healthy. Skipped {} third-party.",
+        report.packages.len(),
+        count(HealthLabel::Retired),
+        count(HealthLabel::Orphaned),
+        count(HealthLabel::AtRisk),
+        count(HealthLabel::Stale),
+        count(HealthLabel::Unknown),
+        count(HealthLabel::Healthy),
         report.third_party.len(),
-    )
-}
-
-fn activity_summary(report: &ActivityReport) -> String {
-    let count = |label: &str| {
-        report
-            .statuses
-            .iter()
-            .filter(|entry| entry.status.label() == label)
-            .count()
-    };
-    format!(
-        "{} active, {} quiet, {} unknown. Quiet means no changes in two years, which can be fine for finished, stable software.",
-        count("Active"),
-        count("Quiet"),
-        count("Unknown"),
     )
 }
 
 #[cfg(test)]
 mod tests {
+    use rpm_health_core::model::{
+        ActivityStatus, InstalledPackage, MaintainerStatus, UpstreamStatus,
+    };
+
     use super::*;
 
     fn names(list: &[&str]) -> Vec<String> {
@@ -223,5 +202,64 @@ mod tests {
             summarize_rpms(&names(&["a", "b", "c", "d", "e"])),
             "a, b, c, +2 more"
         );
+    }
+
+    fn entry(name: &str, label: HealthLabel) -> PackageHealth {
+        PackageHealth {
+            package: InstalledPackage {
+                source_name: name.to_string(),
+                binaries: names(&[name]),
+                versions: names(&["1.0-1.fc45"]),
+                from_fedora: true,
+                fedora_version: Some("1.0".to_string()),
+                changelog: Vec::new(),
+            },
+            label,
+            reason: "Because".to_string(),
+            maintainer: MaintainerStatus::Maintained,
+            activity: ActivityStatus::Unknown {
+                reason: "Not relevant here".to_string(),
+            },
+            upstream: UpstreamStatus::NotTracked,
+        }
+    }
+
+    fn report() -> HealthReport {
+        HealthReport {
+            release: "f45".to_string(),
+            packages: vec![
+                entry("a-stale", HealthLabel::Stale),
+                entry("b-healthy", HealthLabel::Healthy),
+                entry("c-retired", HealthLabel::Retired),
+                entry("d-stale", HealthLabel::Stale),
+            ],
+            third_party: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn selected_names(only: Option<HealthLabel>) -> Vec<String> {
+        select(&report(), only)
+            .iter()
+            .map(|entry| entry.package.source_name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn by_default_healthy_is_hidden_and_the_most_urgent_comes_first() {
+        assert_eq!(selected_names(None), ["c-retired", "a-stale", "d-stale"]);
+    }
+
+    #[test]
+    fn only_shows_just_that_label() {
+        assert_eq!(selected_names(Some(HealthLabel::Healthy)), ["b-healthy"]);
+    }
+
+    #[test]
+    fn the_summary_counts_every_package_even_when_filtered() {
+        let text = summary(&report());
+        assert!(text.contains("Checked 4 Fedora"));
+        assert!(text.contains("1 retired"));
+        assert!(text.contains("2 stale"));
     }
 }

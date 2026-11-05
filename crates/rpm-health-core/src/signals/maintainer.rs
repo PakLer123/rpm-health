@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::http::Transport;
 use crate::model::{InstalledPackage, MaintainerStatus, PackageStatus};
 use crate::sources::koji::KojiPackage;
-use crate::sources::{bodhi, distgit, koji, orphans};
+use crate::sources::{distgit, koji, orphans};
 
 const RAWHIDE_BRANCH: &str = "rawhide";
 
@@ -52,7 +52,7 @@ fn classify(current: Option<&KojiPackage>, next: Option<&KojiPackage>) -> Classi
 }
 
 /// Checks packages against Fedora's data. `current_tag` is this system's Koji
-/// tag, such as `f45`.
+/// tag, such as `f45`. Without `rawhide_tag`, upcoming retirements can't be checked.
 ///
 /// Koji is required, because without it there's nothing to report. The other
 /// sources add detail, so if one fails we carry on and record a warning.
@@ -60,6 +60,7 @@ pub fn check_maintainers(
     transport: &dyn Transport,
     packages: Vec<InstalledPackage>,
     current_tag: &str,
+    rawhide_tag: Option<&str>,
 ) -> Result<MaintainerReport> {
     // `partition` moves each package into one of two new lists. `packages` is
     // used up by this, which the compiler enforces: touching it later wouldn't
@@ -70,17 +71,8 @@ pub fn check_maintainers(
 
     let current = koji::list_packages(transport, current_tag, &names)?;
 
-    let rawhide_tag = match bodhi::rawhide_tag(transport) {
-        Ok(tag) => Some(tag),
-        Err(e) => {
-            warnings.push(format!(
-                "Skipped the check for upcoming retirements, because Rawhide's release is unknown: {e}"
-            ));
-            None
-        }
-    };
     // On Rawhide itself there's no "next release" to compare against.
-    let next = match rawhide_tag.as_deref() {
+    let next = match rawhide_tag {
         Some(tag) if tag != current_tag => koji::list_packages(transport, tag, &names)?,
         _ => HashMap::new(),
     };
@@ -218,14 +210,11 @@ mod tests {
         )
     }
 
-    const RAWHIDE_F46: &str = "{\"releases\": [{\"branch\": \"rawhide\", \"dist_tag\": \"f46\"}]}";
     const NO_ORPHANS: &str = "{\"status_change\": {}}";
 
-    /// A transport where Bodhi and the orphan report both work.
+    /// A transport where the orphan report works.
     fn working_transport() -> FakeTransport {
-        FakeTransport::default()
-            .with_get(bodhi::PENDING_RELEASES_URL, RAWHIDE_F46)
-            .with_get(orphans::REPORT_URL, NO_ORPHANS)
+        FakeTransport::default().with_get(orphans::REPORT_URL, NO_ORPHANS)
     }
 
     #[test]
@@ -278,7 +267,7 @@ mod tests {
             .with_post_reply(&koji_reply(&[Some((false, "alice"))]));
         let packages = vec![installed("htop", true), installed("dbeaver-ce", false)];
 
-        let report = check_maintainers(&transport, packages, "f45").unwrap();
+        let report = check_maintainers(&transport, packages, "f45", Some("f46")).unwrap();
 
         assert_eq!(report.statuses.len(), 1);
         assert_eq!(report.third_party[0].source_name, "dbeaver-ce");
@@ -296,8 +285,13 @@ mod tests {
                 "Dead since kernel 7.2\n",
             );
 
-        let report =
-            check_maintainers(&transport, vec![installed("linux-atm", true)], "f45").unwrap();
+        let report = check_maintainers(
+            &transport,
+            vec![installed("linux-atm", true)],
+            "f45",
+            Some("f46"),
+        )
+        .unwrap();
 
         assert_eq!(
             report.statuses[0].status,
@@ -318,8 +312,13 @@ mod tests {
                 "Replaced by Cockpit",
             );
 
-        let report =
-            check_maintainers(&transport, vec![installed("389-admin", true)], "f45").unwrap();
+        let report = check_maintainers(
+            &transport,
+            vec![installed("389-admin", true)],
+            "f45",
+            Some("f46"),
+        )
+        .unwrap();
 
         assert_eq!(
             report.statuses[0].status,
@@ -335,7 +334,9 @@ mod tests {
             .with_post_reply(&koji_reply(&[Some((true, "alice"))]))
             .with_post_reply(&koji_reply(&[Some((true, "alice"))]));
 
-        let report = check_maintainers(&transport, vec![installed("odd", true)], "f45").unwrap();
+        let report =
+            check_maintainers(&transport, vec![installed("odd", true)], "f45", Some("f46"))
+                .unwrap();
 
         assert_eq!(report.statuses[0].status.label(), "Unknown");
     }
@@ -347,7 +348,9 @@ mod tests {
             .with_post_reply(&koji_reply(&[Some((true, "alice"))]))
             .with_get(&distgit::dead_package_url("old", "rawhide"), "Unmaintained");
 
-        let report = check_maintainers(&transport, vec![installed("old", true)], "f45").unwrap();
+        let report =
+            check_maintainers(&transport, vec![installed("old", true)], "f45", Some("f46"))
+                .unwrap();
 
         assert_eq!(
             report.statuses[0].status,
@@ -361,12 +364,17 @@ mod tests {
     fn orphaned_package_gets_its_date_from_the_report() {
         let report_json = "{\"status_change\": {\"lonely\": \"2026-10-26T21:47:09+00:00\"}}";
         let transport = FakeTransport::default()
-            .with_get(bodhi::PENDING_RELEASES_URL, RAWHIDE_F46)
             .with_get(orphans::REPORT_URL, report_json)
             .with_post_reply(&koji_reply(&[Some((false, "orphan"))]))
             .with_post_reply(&koji_reply(&[Some((false, "orphan"))]));
 
-        let report = check_maintainers(&transport, vec![installed("lonely", true)], "f45").unwrap();
+        let report = check_maintainers(
+            &transport,
+            vec![installed("lonely", true)],
+            "f45",
+            Some("f46"),
+        )
+        .unwrap();
 
         assert_eq!(
             report.statuses[0].status,
@@ -382,12 +390,17 @@ mod tests {
     fn listing_in_the_report_alone_does_not_make_a_package_orphaned() {
         let report_json = "{\"status_change\": {\"links\": \"2026-09-30T17:48:50+00:00\"}}";
         let transport = FakeTransport::default()
-            .with_get(bodhi::PENDING_RELEASES_URL, RAWHIDE_F46)
             .with_get(orphans::REPORT_URL, report_json)
             .with_post_reply(&koji_reply(&[Some((false, "alice"))]))
             .with_post_reply(&koji_reply(&[Some((false, "alice"))]));
 
-        let report = check_maintainers(&transport, vec![installed("links", true)], "f45").unwrap();
+        let report = check_maintainers(
+            &transport,
+            vec![installed("links", true)],
+            "f45",
+            Some("f46"),
+        )
+        .unwrap();
 
         assert_eq!(report.statuses[0].status, MaintainerStatus::Maintained);
     }
@@ -398,21 +411,27 @@ mod tests {
             .with_post_reply(&koji_reply(&[None]))
             .with_post_reply(&koji_reply(&[None]));
 
-        let report = check_maintainers(&transport, vec![installed("mine", true)], "f45").unwrap();
+        let report = check_maintainers(
+            &transport,
+            vec![installed("mine", true)],
+            "f45",
+            Some("f46"),
+        )
+        .unwrap();
 
         assert_eq!(report.statuses[0].status.label(), "Unknown");
     }
 
     #[test]
-    fn scan_continues_with_warnings_when_optional_sources_fail() {
+    fn scan_continues_with_a_warning_when_the_orphan_report_fails() {
         let transport = FakeTransport::default()
-            .with_failing_get(bodhi::PENDING_RELEASES_URL)
             .with_failing_get(orphans::REPORT_URL)
             .with_post_reply(&koji_reply(&[Some((false, "orphan"))]));
 
-        let report = check_maintainers(&transport, vec![installed("lonely", true)], "f45").unwrap();
+        let report =
+            check_maintainers(&transport, vec![installed("lonely", true)], "f45", None).unwrap();
 
-        assert_eq!(report.warnings.len(), 2);
+        assert_eq!(report.warnings.len(), 1);
         assert_eq!(
             report.statuses[0].status,
             MaintainerStatus::Orphaned { since: None }
@@ -426,7 +445,13 @@ mod tests {
             .with_post_reply(&koji_reply(&[Some((true, "alice"))]))
             .with_failing_get(&distgit::dead_package_url("flaky", "f45"));
 
-        let report = check_maintainers(&transport, vec![installed("flaky", true)], "f45").unwrap();
+        let report = check_maintainers(
+            &transport,
+            vec![installed("flaky", true)],
+            "f45",
+            Some("f46"),
+        )
+        .unwrap();
 
         assert_eq!(report.statuses[0].status.label(), "Unknown");
         assert_eq!(report.warnings.len(), 1);
@@ -436,7 +461,13 @@ mod tests {
     fn on_rawhide_koji_is_only_queried_once() {
         let transport = working_transport().with_post_reply(&koji_reply(&[Some((false, "alice"))]));
 
-        let report = check_maintainers(&transport, vec![installed("htop", true)], "f46").unwrap();
+        let report = check_maintainers(
+            &transport,
+            vec![installed("htop", true)],
+            "f46",
+            Some("f46"),
+        )
+        .unwrap();
 
         assert_eq!(report.statuses[0].status, MaintainerStatus::Maintained);
         assert_eq!(transport.post_bodies.borrow().len(), 1);
@@ -447,7 +478,12 @@ mod tests {
         let bad_reply = "<methodResponse><params></params></methodResponse>";
         let transport = working_transport().with_post_reply(bad_reply);
 
-        let result = check_maintainers(&transport, vec![installed("htop", true)], "f45");
+        let result = check_maintainers(
+            &transport,
+            vec![installed("htop", true)],
+            "f45",
+            Some("f46"),
+        );
 
         assert!(matches!(result, Err(Error::Parse { .. })));
     }

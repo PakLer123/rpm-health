@@ -3,6 +3,7 @@
 
 pub mod dates;
 pub mod error;
+pub mod health;
 pub mod http;
 pub mod model;
 pub mod release;
