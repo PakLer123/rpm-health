@@ -18,15 +18,30 @@ const REQUEST_GAP: Duration = Duration::from_millis(500);
 /// How long to wait before each retry. A scan can make over 100 requests, so one
 /// network hiccup shouldn't throw away all the others.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(5)];
+/// If a server asks us to wait longer than this, we give up rather than leave
+/// the user staring at a terminal that appears to be stuck.
+const LONGEST_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// What the rest of the code needs from an HTTP response.
 #[derive(Debug, Clone)]
 pub struct Response {
     pub status: u16,
     pub body: String,
+    /// How long the server asked us to wait, from its `Retry-After` header.
+    pub retry_after: Option<Duration>,
+    pub content_type: Option<String>,
 }
 
 impl Response {
+    pub fn new(status: u16, body: String) -> Self {
+        Response {
+            status,
+            body,
+            retry_after: None,
+            content_type: None,
+        }
+    }
+
     /// Returns the body, or an error if the server didn't answer with a 2xx.
     ///
     /// Taking `self` by value moves the response into this method, so the
@@ -103,21 +118,30 @@ fn send_with_retries(
 ) -> Result<Response> {
     let mut result = attempt();
     for delay in delays {
-        if !is_worth_retrying(&result) {
+        let Some(wait) = wait_before_retry(&result, *delay) else {
             break;
-        }
-        sleep(*delay);
+        };
+        sleep(wait);
         result = attempt();
     }
     result
 }
 
-/// Network failures and overloaded servers can pass. A 404 won't.
-fn is_worth_retrying(result: &Result<Response>) -> bool {
+/// Returns how long to wait, or `None` if retrying isn't worthwhile. Network
+/// failures and overloaded servers can pass, but a 404 won't. A server's request
+/// to wait longer than our usual delay always wins.
+fn wait_before_retry(result: &Result<Response>, delay: Duration) -> Option<Duration> {
     match result {
-        Ok(response) => matches!(response.status, 429 | 502 | 503 | 504),
-        Err(Error::Http { .. }) => true,
-        Err(_) => false,
+        Ok(response) if matches!(response.status, 429 | 502 | 503 | 504) => {
+            match response.retry_after {
+                Some(asked) if asked > LONGEST_RETRY_AFTER => None,
+                Some(asked) => Some(asked.max(delay)),
+                None => Some(delay),
+            }
+        }
+        Ok(_) => None,
+        Err(Error::Http { .. }) => Some(delay),
+        Err(_) => None,
     }
 }
 
@@ -150,8 +174,27 @@ fn read_response(
     };
     let response = result.map_err(to_error)?;
     let status = response.status().as_u16();
+    let header = |name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    };
+    let retry_after =
+        header(reqwest::header::RETRY_AFTER).and_then(|value| parse_retry_after(&value));
+    let content_type = header(reqwest::header::CONTENT_TYPE);
     let body = response.text().map_err(to_error)?;
-    Ok(Response { status, body })
+    Ok(Response {
+        retry_after,
+        content_type,
+        ..Response::new(status, body)
+    })
+}
+
+/// `Retry-After` can also be a date, but then we simply use our usual delays.
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    value.trim().parse().ok().map(Duration::from_secs)
 }
 
 /// Library errors often wrap the real cause, such as "connection reset", inside
@@ -187,6 +230,7 @@ pub(crate) mod fake {
         pub failing_gets: HashSet<String>,
         pub post_replies: RefCell<VecDeque<String>>,
         pub post_bodies: RefCell<Vec<String>>,
+        pub get_urls: RefCell<Vec<String>>,
     }
 
     impl FakeTransport {
@@ -208,6 +252,7 @@ pub(crate) mod fake {
 
     impl Transport for FakeTransport {
         fn get(&self, url: &str) -> Result<Response> {
+            self.get_urls.borrow_mut().push(url.to_string());
             if self.failing_gets.contains(url) {
                 return Err(Error::Http {
                     url: url.to_string(),
@@ -215,14 +260,8 @@ pub(crate) mod fake {
                 });
             }
             Ok(match self.gets.get(url) {
-                Some(body) => Response {
-                    status: 200,
-                    body: body.clone(),
-                },
-                None => Response {
-                    status: 404,
-                    body: String::new(),
-                },
+                Some(body) => Response::new(200, body.clone()),
+                None => Response::new(404, String::new()),
             })
         }
 
@@ -232,7 +271,7 @@ pub(crate) mod fake {
             self.post_bodies.borrow_mut().push(body);
             let reply = self.post_replies.borrow_mut().pop_front();
             let body = reply.unwrap_or_else(|| panic!("unexpected POST to {url}"));
-            Ok(Response { status: 200, body })
+            Ok(Response::new(200, body))
         }
     }
 }
@@ -245,19 +284,13 @@ mod tests {
 
     #[test]
     fn success_status_returns_the_body() {
-        let response = Response {
-            status: 200,
-            body: "hello".to_string(),
-        };
+        let response = Response::new(200, "hello".to_string());
         assert_eq!(response.into_success_body("http://x").unwrap(), "hello");
     }
 
     #[test]
     fn error_status_becomes_an_error() {
-        let response = Response {
-            status: 503,
-            body: String::new(),
-        };
+        let response = Response::new(503, String::new());
         assert!(matches!(
             response.into_success_body("http://x"),
             Err(Error::BadStatus { status: 503, .. })
@@ -285,10 +318,7 @@ mod tests {
     }
 
     fn status(status: u16) -> Result<Response> {
-        Ok(Response {
-            status,
-            body: String::new(),
-        })
+        Ok(Response::new(status, String::new()))
     }
 
     /// Plays back answers in order, and reports how many attempts were made.
@@ -354,5 +384,40 @@ mod tests {
         .unwrap();
 
         assert_eq!(*waited.borrow(), [Duration::from_secs(2)]);
+    }
+
+    fn asking_to_wait(seconds: u64) -> Result<Response> {
+        Ok(Response {
+            retry_after: Some(Duration::from_secs(seconds)),
+            ..Response::new(429, String::new())
+        })
+    }
+
+    #[test]
+    fn a_longer_wait_requested_by_the_server_wins() {
+        let delay = Duration::from_secs(2);
+        assert_eq!(
+            wait_before_retry(&asking_to_wait(30), delay),
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn our_own_delay_is_the_minimum() {
+        let delay = Duration::from_secs(2);
+        assert_eq!(wait_before_retry(&asking_to_wait(1), delay), Some(delay));
+    }
+
+    #[test]
+    fn a_very_long_wait_means_giving_up() {
+        let (result, attempts) = run(vec![asking_to_wait(3600)]);
+        assert_eq!(result.unwrap().status, 429);
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn retry_after_seconds_are_understood_and_dates_are_ignored() {
+        assert_eq!(parse_retry_after(" 120 "), Some(Duration::from_secs(120)));
+        assert_eq!(parse_retry_after("Fri, 31 Dec 1999 23:59:59 GMT"), None);
     }
 }
