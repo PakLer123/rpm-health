@@ -61,16 +61,20 @@ fn fetch_one_at_a_time(transport: &dyn Transport, names: &[String]) -> Result<Ve
     Ok(items)
 }
 
+/// The URL of one page of the full Fedora list.
+pub fn full_list_url(page: usize) -> Result<String> {
+    packages_url(&[
+        ("distribution", DISTRIBUTION),
+        ("items_per_page", &ITEMS_PER_PAGE.to_string()),
+        ("page", &page.to_string()),
+    ])
+}
+
 fn fetch_all_pages(transport: &dyn Transport) -> Result<Vec<Item>> {
-    let per_page = ITEMS_PER_PAGE.to_string();
     let mut items = Vec::new();
     let mut page = 1;
     loop {
-        let url = packages_url(&[
-            ("distribution", DISTRIBUTION),
-            ("items_per_page", &per_page),
-            ("page", &page.to_string()),
-        ])?;
+        let url = full_list_url(page)?;
         let fetched = fetch_page(transport, &url)?;
         // The empty check means a wrong `total_items` can't make this loop forever.
         let finished = fetched.items.is_empty() || page * ITEMS_PER_PAGE >= fetched.total_items;
@@ -111,12 +115,7 @@ mod tests {
     const FIXTURE: &str = include_str!("../../tests/fixtures/anitya_package.json");
 
     fn page_url(page: usize) -> String {
-        packages_url(&[
-            ("distribution", DISTRIBUTION),
-            ("items_per_page", "250"),
-            ("page", &page.to_string()),
-        ])
-        .unwrap()
+        full_list_url(page).unwrap()
     }
 
     fn single_url(name: &str) -> String {

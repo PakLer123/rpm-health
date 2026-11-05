@@ -173,6 +173,15 @@ impl<T: Transport> CachingTransport<T> {
         self.stats.get()
     }
 
+    /// Whether a GET of this URL would be answered from disk, so front-ends can
+    /// warn people about a slow operation only when it's really going to be slow.
+    pub fn has_saved_response(&self, url: &str) -> bool {
+        match &self.store {
+            Some(store) if !self.refresh => store.load(url, None, (self.clock)()).is_some(),
+            _ => false,
+        }
+    }
+
     fn fetch(
         &self,
         url: &str,
@@ -331,6 +340,18 @@ mod tests {
         assert!(later.inner.get_urls.borrow().is_empty());
         assert_eq!(later.stats().reused, 1);
         assert_eq!(later.stats().fetched, 0);
+    }
+
+    #[test]
+    fn has_saved_response_reports_what_a_get_would_do() {
+        let dir = TempDir::new();
+        assert!(!cached(&dir, serving("x"), false, at_now).has_saved_response(URL));
+
+        fill(&dir, "first");
+
+        assert!(cached(&dir, serving("x"), false, at_now).has_saved_response(URL));
+        assert!(!cached(&dir, serving("x"), true, at_now).has_saved_response(URL));
+        assert!(!cached(&dir, serving("x"), false, a_day_later).has_saved_response(URL));
     }
 
     #[test]

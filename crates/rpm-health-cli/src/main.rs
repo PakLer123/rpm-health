@@ -8,6 +8,7 @@ use rpm_health_core::cache::{self, CacheStats, CachingTransport};
 use rpm_health_core::error::{Error, Result};
 use rpm_health_core::health::{HealthLabel, HealthReport, PackageHealth, check_health};
 use rpm_health_core::http::HttpClient;
+use rpm_health_core::sources::anitya;
 use rpm_health_core::{dates, release, rpm};
 
 const MAX_RPMS_SHOWN: usize = 3;
@@ -123,7 +124,9 @@ fn scan(only: Option<HealthLabel>, json: bool, refresh: bool) -> Result<()> {
         "Checking {} source packages against Fedora's data for {current_tag}.",
         packages.len()
     );
-    eprintln!("This takes about 8 minutes if nothing is cached from the last day...");
+    if !transport.has_saved_response(&anitya::full_list_url(1)?) {
+        eprintln!("Nothing recent is cached, so this takes about 8 minutes...");
+    }
     let mut report = check_health(&transport, packages, &current_tag, dates::today())?;
 
     for warning in &report.warnings {
