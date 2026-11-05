@@ -28,7 +28,7 @@ writes is a cache of responses in your own cache directory.
 ## Installing
 
 There's no Fedora package yet, so for now you build it from a checkout of this
-repository:
+repository. [`packaging/`](packaging/README.md) has the RPM spec and packaging steps.
 
 ```console
 $ sudo dnf install cargo gcc openssl-devel
@@ -116,6 +116,12 @@ These are shared community services, so rpm-health:
   infrastructure. If it's unavailable, you still get orphan status from Koji, just
   without the dates.
 
+## Development notes
+
+This project was built with substantial assistance from an AI tool (Claude), under
+the direction of its maintainer. See [Fedora's policy](https://docs.fedoraproject.org/en-US/council/policy/ai-contribution-policy/)
+on AI-assisted contributions.
+
 ## Related tools
 
 If rpm-health isn't what you're after, one of these might be:
@@ -157,7 +163,7 @@ $ cargo test --workspace
 
 ## Roadmap
 
-- Fedora packaging: a spec file, COPR, then a package review request
+- Fedora packaging: COPR, then a package review request
 - A systemd timer and desktop notifications
 - A GTK4 and libadwaita front-end
 
