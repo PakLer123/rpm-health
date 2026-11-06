@@ -1,7 +1,7 @@
 %bcond check 1
 
 Name:           rpm-health
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Find installed Fedora packages at risk of dying or going stale
 
@@ -81,5 +81,11 @@ target/rpm/%{name} completions fish > %{buildroot}%{fish_completions_dir}/%{name
 %{fish_completions_dir}/%{name}.fish
 
 %changelog
+* Fri Nov 06 2026 PakLer123 <derrelted04@gmail.com> - 0.1.1-1
+- Update to 0.1.1
+- Give new upstream major versions a 90-day grace period before calling them stale
+- Hide unknown packages from the default scan output
+- Fit narrow terminals
+
 * Fri Nov 06 2026 PakLer123 <derrelted04@gmail.com> - 0.1.0-1
 - Initial package

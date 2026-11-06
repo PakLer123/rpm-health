@@ -5,6 +5,9 @@ use crate::version::Gap;
 
 /// Fedora retires packages that stay orphaned for this long.
 const ORPHAN_GRACE_PERIOD: Duration = Duration::weeks(6);
+/// How long Fedora gets to catch up with a new major version before the gap
+/// counts against a package. Big updates take time to test and to coordinate.
+const NEW_MAJOR_GRACE_PERIOD: Duration = Duration::days(90);
 
 /// One installed source package, with the binary RPMs built from it.
 ///
@@ -172,6 +175,8 @@ pub enum UpstreamStatus {
         /// up, which is often just Fedora's policy of saving big updates for
         /// the next release rather than a sign of neglect.
         fedora_gap: Option<Gap>,
+        /// When upstream's newer major version first appeared, for major gaps.
+        new_major_since: Option<Date>,
     },
     /// Tracked, but a fair comparison isn't possible.
     NotComparable {
@@ -197,15 +202,26 @@ impl UpstreamStatus {
         }
     }
 
-    /// True for a major version gap that Rawhide hasn't closed either.
-    pub fn is_well_behind(&self) -> bool {
-        matches!(
-            self,
+    /// How far Fedora as a whole is behind, if at all.
+    pub fn gap_in_fedora(&self) -> Option<Gap> {
+        match self {
+            UpstreamStatus::Behind { fedora_gap, .. } => *fedora_gap,
+            _ => None,
+        }
+    }
+
+    /// True for a major version gap that Rawhide hasn't closed either, once
+    /// Fedora has had a fair chance to catch up. With no date to go on, the gap
+    /// counts, because a missing date doesn't mean the release is new.
+    pub fn is_well_behind(&self, today: Date) -> bool {
+        match self {
             UpstreamStatus::Behind {
                 fedora_gap: Some(Gap::Major),
+                new_major_since,
                 ..
-            }
-        )
+            } => new_major_since.is_none_or(|since| today - since >= NEW_MAJOR_GRACE_PERIOD),
+            _ => false,
+        }
     }
 
     /// A human-readable description of the status.
@@ -216,14 +232,21 @@ impl UpstreamStatus {
                 upstream,
                 rawhide,
                 fedora_gap,
+                new_major_since,
                 ..
-            } => match (fedora_gap, rawhide) {
-                (None, _) => format!("Upstream is at {upstream}, and Rawhide already has it"),
-                (Some(_), Some(rawhide)) => {
-                    format!("Upstream is at {upstream}, and Rawhide has {rawhide}")
+            } => {
+                let versions = match (fedora_gap, rawhide) {
+                    (None, _) => format!("Upstream is at {upstream}, and Rawhide already has it"),
+                    (Some(_), Some(rawhide)) => {
+                        format!("Upstream is at {upstream}, and Rawhide has {rawhide}")
+                    }
+                    (Some(_), None) => format!("Upstream is at {upstream}"),
+                };
+                match new_major_since {
+                    Some(since) => format!("{versions}. That major version appeared on {since}"),
+                    None => versions,
                 }
-                (Some(_), None) => format!("Upstream is at {upstream}"),
-            },
+            }
             UpstreamStatus::NotComparable {
                 upstream: Some(upstream),
                 reason,
@@ -271,5 +294,38 @@ mod tests {
         };
         assert_eq!(status.label(), "Retired");
         assert_eq!(status.reason(), "Dead since kernel 7.2");
+    }
+
+    fn major_gap(since: Option<Date>) -> UpstreamStatus {
+        UpstreamStatus::Behind {
+            upstream: "2.0".to_string(),
+            gap: Gap::Major,
+            rawhide: None,
+            fedora_gap: Some(Gap::Major),
+            new_major_since: since,
+        }
+    }
+
+    #[test]
+    fn a_new_major_version_gets_a_grace_period() {
+        let today = Date::from_calendar_date(2026, Month::November, 6).unwrap();
+        let days_ago = |days| Some(today - Duration::days(days));
+
+        assert!(!major_gap(days_ago(50)).is_well_behind(today));
+        assert!(!major_gap(days_ago(89)).is_well_behind(today));
+        assert!(major_gap(days_ago(90)).is_well_behind(today));
+        assert!(major_gap(days_ago(400)).is_well_behind(today));
+    }
+
+    #[test]
+    fn a_major_gap_with_no_date_still_counts() {
+        let today = Date::from_calendar_date(2026, Month::November, 6).unwrap();
+        assert!(major_gap(None).is_well_behind(today));
+    }
+
+    #[test]
+    fn the_detail_says_when_the_major_version_appeared() {
+        let since = Date::from_calendar_date(2026, Month::September, 17).unwrap();
+        assert!(major_gap(Some(since)).detail().contains("2026-09-17"));
     }
 }

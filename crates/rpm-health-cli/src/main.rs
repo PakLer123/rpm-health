@@ -6,7 +6,7 @@ use std::process::{self, ExitCode};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use comfy_table::{ContentArrangement, Table};
+use comfy_table::{ColumnConstraint, ContentArrangement, Table};
 use rpm_health_core::cache::{self, CacheStats, CachingTransport};
 use rpm_health_core::error::{Error, Result};
 use rpm_health_core::health::{HealthLabel, HealthReport, PackageHealth, check_health};
@@ -15,6 +15,9 @@ use rpm_health_core::sources::anitya;
 use rpm_health_core::{dates, release, rpm};
 
 const MAX_RPMS_SHOWN: usize = 3;
+/// Below this terminal width, the RPM and version columns get squeezed until
+/// they're unreadable, so they're left out. `show` still has them.
+const WIDE_TABLE_COLUMNS: u16 = 120;
 const BINARY_NAME: &str = "rpm-health";
 const CHANGELOG_ENTRIES_SHOWN: usize = 5;
 const SECONDS_PER_HOUR: u64 = 60 * 60;
@@ -53,11 +56,14 @@ enum Command {
     /// At risk: removed from Rawhide, so it won't be in the next Fedora release.
     ///
     /// Stale: quiet for two years and behind upstream, or a major version behind
-    /// upstream even in Rawhide.
+    /// upstream even in Rawhide, once that major version is at least 90 days old.
     ///
     /// Unknown: there isn't enough information for a verdict.
     ///
-    /// Healthy: none of the above. Healthy packages are hidden unless requested.
+    /// Healthy: none of the above.
+    ///
+    /// Healthy and Unknown packages aren't listed unless requested with --only, but
+    /// they're always counted in the summary.
     Scan {
         /// Only list packages with this health label
         #[arg(long, value_enum)]
@@ -175,7 +181,7 @@ fn scan(only: Option<HealthLabel>, json: bool, refresh: bool) -> Result<()> {
         packages.len()
     );
     if !transport.has_saved_response(&anitya::full_list_url(1)?) {
-        eprintln!("Nothing recent is cached, so this takes about 8 minutes...");
+        eprintln!("Nothing recent is cached, so this takes about 10 minutes...");
     }
     let mut report = check_health(&transport, packages, &current_tag, dates::today())?;
 
@@ -194,9 +200,18 @@ fn scan(only: Option<HealthLabel>, json: bool, refresh: bool) -> Result<()> {
     if selected.is_empty() {
         emit(nothing_selected_message(only));
     } else {
-        emit(build_table(&selected));
+        let narrow = terminal_is_narrow();
+        emit(build_table(&selected, narrow));
+        if narrow {
+            emit("Run rpm-health show <package> for its RPMs and versions.");
+        }
     }
     emit(summary(&report));
+    if only.is_none()
+        && let Some(hint) = unknown_hint(&report)
+    {
+        emit(hint);
+    }
     Ok(())
 }
 
@@ -337,15 +352,16 @@ fn describe_age(seconds: u64) -> String {
     }
 }
 
-/// With no filter, healthy packages are left out so the problems stand out.
-/// The most urgent packages come first.
+/// With no filter, only packages you might act on are listed. Healthy ones aren't
+/// a concern, and Unknown ones are mostly things like fonts and macro packages with
+/// no upstream to compare against. The most urgent packages come first.
 fn select(report: &HealthReport, only: Option<HealthLabel>) -> Vec<&PackageHealth> {
     let mut selected: Vec<&PackageHealth> = report
         .packages
         .iter()
         .filter(|entry| match only {
             Some(label) => entry.label == label,
-            None => entry.label != HealthLabel::Healthy,
+            None => !matches!(entry.label, HealthLabel::Healthy | HealthLabel::Unknown),
         })
         .collect();
     // This sort keeps equal items in their existing order, which is by name.
@@ -360,25 +376,47 @@ fn nothing_selected_message(only: Option<HealthLabel>) -> String {
     }
 }
 
-fn build_table(entries: &[&PackageHealth]) -> Table {
+/// `width()` is the terminal's width, or `None` when output is going to a file or
+/// a pipe. In that case the full table is the most useful.
+fn terminal_is_narrow() -> bool {
+    Table::new()
+        .width()
+        .is_some_and(|width| width < WIDE_TABLE_COLUMNS)
+}
+
+fn build_table(entries: &[&PackageHealth], narrow: bool) -> Table {
     let mut table = Table::new();
-    table
-        .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header([
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    if narrow {
+        table.set_header(["Source package", "Health", "Why"]);
+        for entry in entries {
+            table.add_row([
+                entry.package.source_name.clone(),
+                entry.label.name().to_string(),
+                entry.reason.clone(),
+            ]);
+        }
+    } else {
+        table.set_header([
             "Source package",
             "Installed RPMs",
             "Version",
             "Health",
             "Why",
         ]);
-    for entry in entries {
-        table.add_row([
-            entry.package.source_name.clone(),
-            summarize_rpms(&entry.package.binaries),
-            entry.package.versions.join(", "),
-            entry.label.name().to_string(),
-            entry.reason.clone(),
-        ]);
+        for entry in entries {
+            table.add_row([
+                entry.package.source_name.clone(),
+                summarize_rpms(&entry.package.binaries),
+                entry.package.versions.join(", "),
+                entry.label.name().to_string(),
+                entry.reason.clone(),
+            ]);
+        }
+    }
+    // Package names are what people copy, so they're never split across lines.
+    if let Some(name_column) = table.column_mut(0) {
+        name_column.set_constraint(ColumnConstraint::ContentWidth);
     }
     table
 }
@@ -395,6 +433,19 @@ fn summarize_rpms(binaries: &[String]) -> String {
             binaries.len() - MAX_RPMS_SHOWN
         )
     }
+}
+
+fn unknown_hint(report: &HealthReport) -> Option<String> {
+    let unknown = report
+        .packages
+        .iter()
+        .filter(|entry| entry.label == HealthLabel::Unknown)
+        .count();
+    (unknown > 0).then(|| {
+        format!(
+            "Not listed: {unknown} unknown, which there isn't enough data to judge. Use --only unknown to see them."
+        )
+    })
 }
 
 fn summary(report: &HealthReport) -> String {
@@ -494,6 +545,28 @@ mod tests {
     }
 
     #[test]
+    fn unknown_packages_are_hidden_by_default_but_can_be_requested() {
+        let mut scan = report();
+        scan.packages.push(entry("e-unknown", HealthLabel::Unknown));
+
+        let names = |only| -> Vec<String> {
+            select(&scan, only)
+                .iter()
+                .map(|entry| entry.package.source_name.clone())
+                .collect()
+        };
+
+        assert!(!names(None).contains(&"e-unknown".to_string()));
+        assert_eq!(names(Some(HealthLabel::Unknown)), ["e-unknown"]);
+        assert!(unknown_hint(&scan).unwrap().contains("1 unknown"));
+    }
+
+    #[test]
+    fn there_is_no_unknown_hint_when_there_are_none() {
+        assert_eq!(unknown_hint(&report()), None);
+    }
+
+    #[test]
     fn only_shows_just_that_label() {
         assert_eq!(selected_names(Some(HealthLabel::Healthy)), ["b-healthy"]);
     }
@@ -530,11 +603,36 @@ mod tests {
     #[test]
     fn the_table_shows_the_rpm_label_and_reason() {
         let scan = report();
-        let text = build_table(&select(&scan, None)).to_string();
+        let text = build_table(&select(&scan, None), false).to_string();
         assert!(text.contains("c-retired"));
+        assert!(text.contains("Installed RPMs"));
         assert!(text.contains("Retired"));
         assert!(text.contains("Because"));
         assert!(!text.contains("b-healthy"));
+    }
+
+    #[test]
+    fn the_narrow_table_drops_rpms_and_keeps_the_reason() {
+        let scan = report();
+        let text = build_table(&select(&scan, None), true).to_string();
+        assert!(!text.contains("Installed RPMs"));
+        assert!(!text.contains("1.0-1.fc45"));
+        assert!(text.contains("Because"));
+    }
+
+    /// The real output that prompted this split names like `abattis-cantar/ell-fonts`.
+    #[test]
+    fn package_names_are_not_split_in_an_80_column_terminal() {
+        let long_name = "abattis-cantarell-fonts";
+        let mut long_entry = entry(long_name, HealthLabel::Stale);
+        long_entry.reason = "No changes found back to 2023-07-19. ".repeat(4);
+        let mut table = build_table(&[&long_entry], true);
+        table.set_width(80);
+
+        let text = table.to_string();
+
+        assert!(text.contains(long_name));
+        assert!(text.lines().all(|line| line.chars().count() <= 80));
     }
 
     #[test]
