@@ -175,7 +175,7 @@ pub enum UpstreamStatus {
         /// up, which is often just Fedora's policy of saving big updates for
         /// the next release rather than a sign of neglect.
         fedora_gap: Option<Gap>,
-        /// When upstream's newer major version first appeared, for major gaps.
+        /// When the first major version newer than Fedora's appeared, for major gaps.
         new_major_since: Option<Date>,
     },
     /// Tracked, but a fair comparison isn't possible.
@@ -243,7 +243,9 @@ impl UpstreamStatus {
                     (Some(_), None) => format!("Upstream is at {upstream}"),
                 };
                 match new_major_since {
-                    Some(since) => format!("{versions}. That major version appeared on {since}"),
+                    Some(since) => {
+                        format!("{versions}. The first newer major version appeared on {since}")
+                    }
                     None => versions,
                 }
             }

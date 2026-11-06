@@ -83,7 +83,7 @@ changes, so no single signal decides unless it's definitive.
 | **Retired** | Removed from your Fedora release, so it no longer gets updates |
 | **Orphaned** | Has no maintainer, and will be retired after six weeks unless adopted |
 | **At risk** | Removed from Rawhide, so it won't be in the next Fedora release |
-| **Stale** | Quiet for two years and behind upstream, or a major version behind upstream even in Rawhide, once that version is at least 90 days old |
+| **Stale** | Quiet for two years and behind upstream, or a major version behind upstream even in Rawhide, once the first newer major is at least 90 days old |
 | **Unknown** | Quiet, with no usable upstream data, so there's no evidence either way |
 | **Healthy** | None of the above |
 

@@ -382,7 +382,7 @@ mod tests {
             today(),
         );
         assert_eq!(label, HealthLabel::Healthy);
-        assert!(reason.contains("That major version appeared on"));
+        assert!(reason.contains("The first newer major version appeared on"));
     }
 
     #[test]
